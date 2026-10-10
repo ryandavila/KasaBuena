@@ -22,7 +22,7 @@ jobs:
         # setup-uv stopped publishing major tags in v8 — pin the full version
         uses: astral-sh/setup-uv@v10.3.0
         with:
-          python-version: "3.14"
+          python-version: "3.15"
 
       - name: Install bun
         uses: oven-sh/setup-bun@v2
@@ -57,7 +57,7 @@ jobs:
         # setup-uv stopped publishing major tags in v8 — pin the full version
         uses: astral-sh/setup-uv@v10.3.0
         with:
-          python-version: "3.14"
+          python-version: "3.15"
 
       - name: Install bun
         uses: oven-sh/setup-bun@v2

@@ -43,6 +43,7 @@ import random
 from . import solar
 from .kasa_service import DeviceRegistry, set_power_many
 from .logging_config import get_logger
+from .run_history import run_history
 from .schemas import VacationConfig
 
 logger = get_logger(__name__)
@@ -282,7 +283,11 @@ class VacationEngine:
             return
 
         target = not self._expected.get(device_id, False)
-        result = await set_power_many(self._registry, [device_id], target)
+        with run_history.track("vacation", "toggle", device_id) as run:
+            result = await set_power_many(self._registry, [device_id], target)
+            if result.failed:
+                run.result = "error"
+                run.error = "Device could not be controlled."
         if device_id in result.succeeded:
             self._expected[device_id] = target
         # Re-draw regardless of success: a device that failed this tick shouldn't
@@ -301,7 +306,11 @@ class VacationEngine:
         to_off = [d for d in device_ids if not self._externally_changed(d)]
         switched = False
         if to_off:
-            result = await set_power_many(self._registry, to_off, False)
+            with run_history.track("vacation", "window_closed") as run:
+                result = await set_power_many(self._registry, to_off, False)
+                if result.failed:
+                    run.result = "partial" if result.succeeded else "error"
+                    run.error = f"{len(result.failed)} device(s) failed."
             switched = bool(result.succeeded)
         # New evening starts with a fresh schedule and no stale expectations.
         self._next_toggle.clear()
@@ -352,6 +361,9 @@ class VacationEngine:
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 - the engine must never crash startup
+                with run_history.track("vacation", "timer") as run:
+                    run.result = "error"
+                    run.error = type(e).__name__
                 logger.error(f"Vacation cycle failed: {e}")
             await asyncio.sleep(_TICK_SECONDS)
 

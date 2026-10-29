@@ -61,6 +61,29 @@ def test_health_failure_recovery_and_latest_scan(monkeypatch):
     assert recovered["last_error_at"] == health["last_error_at"]
 
 
+def test_diagnostics_exposes_history_and_schedule_warnings(monkeypatch):
+    from api.config import Settings
+    from api.run_history import RunHistory
+
+    history = RunHistory()
+    with history.track("schedule", "timer", "rule-1") as run:
+        run.result = "missed"
+    monkeypatch.setattr(routes, "run_history", history)
+    monkeypatch.setattr(routes, "get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(
+        routes.schedules,
+        "list_rules",
+        lambda: [
+            {"id": "rule-1", "last_fired": {"result": "missed"}},
+            {"id": "sun", "enabled": True, "kind": "sunrise"},
+        ],
+    )
+    body = client_for(DeviceRegistry(), monkeypatch).get("/api/diagnostics").json()
+    assert body["recent_runs"][0]["result"] == "missed"
+    assert any("location" in warning for warning in body["warnings"])
+    assert any("rule-1" in warning for warning in body["warnings"])
+
+
 def test_absent_energy_meter_does_not_degrade_device_health(caplog):
     import pytest
 

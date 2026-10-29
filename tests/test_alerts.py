@@ -226,6 +226,8 @@ def test_center_ring_buffer_is_bounded():
 
 
 class _FakeResponse:
+    status_code = 200
+
     def raise_for_status(self) -> None:
         pass
 
@@ -444,3 +446,35 @@ def test_put_thresholds_full_replace_and_sanitizes(client):
     # A second PUT fully replaces (mirrors PUT /favorites).
     c.put("/api/alerts/thresholds", json={"thresholds": {"d3": 5.0}})
     assert store.get_all() == {"d3": 5.0}
+
+
+def test_webhook_history_records_http_and_network_failures(monkeypatch):
+    import httpx
+
+    from api.run_history import RunHistory
+
+    history = RunHistory()
+    monkeypatch.setattr(alerts, "run_history", history)
+    alert = AlertCenter().emit(AlertDraft("device_unreachable", "d1", "gone"), ts=1)
+
+    class Client(_FakeClient):
+        async def post(self, url, **kwargs):
+            return httpx.Response(503, request=httpx.Request("POST", url))
+
+    assert not asyncio.run(
+        deliver_webhook("https://example.test/secret", alert, client_factory=Client)
+    )
+    run = history.all()[0]
+    assert run.status_code == 503
+    assert run.result == "error" and run.error == "HTTPStatusError"
+    assert "secret" not in run.model_dump_json()
+
+    class Offline(_FakeClient):
+        async def post(self, url, **kwargs):
+            raise httpx.ConnectError("secret connection info")
+
+    assert not asyncio.run(
+        deliver_webhook("https://example.test", alert, client_factory=Offline)
+    )
+    assert history.all()[0].status_code is None
+    assert history.all()[0].error == "ConnectError"

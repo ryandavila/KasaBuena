@@ -32,6 +32,7 @@ import httpx
 from .config import get_settings
 from .json_store import JsonDocumentStore
 from .logging_config import get_logger
+from .run_history import run_history
 from .schemas import Alert, AlertType
 
 logger = get_logger(__name__)
@@ -257,16 +258,21 @@ async def deliver_webhook(
     is exactly what ntfy renders. A network/HTTP failure is logged and swallowed
     so a flaky endpoint can never disrupt evaluation.
     """
-    try:
-        async with client_factory(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                url, content=alert.message, headers={"Title": _alert_title(alert)}
-            )
-            response.raise_for_status()
-    except Exception as e:  # noqa: BLE001 - webhook delivery must never be fatal
-        logger.warning(f"Alert webhook to {url} failed: {e}")
-        return False
-    return True
+    with run_history.track("webhook", alert.type, alert.device_id) as run:
+        try:
+            async with client_factory(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
+                response = await client.post(
+                    url, content=alert.message, headers={"Title": _alert_title(alert)}
+                )
+                run.status_code = response.status_code
+                response.raise_for_status()
+        except Exception as e:  # noqa: BLE001 - webhook delivery must never be fatal
+            run.result = "error"
+            run.error = type(e).__name__
+            # URLs can contain credentials or secret topic names.
+            logger.warning("Alert webhook failed (%s)", type(e).__name__)
+            return False
+        return True
 
 
 def collect_readings(registry, history) -> list[DeviceReading]:
@@ -339,6 +345,9 @@ async def run_alert_evaluator(
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 - the evaluator must never crash startup
+            with run_history.track("alerts", "timer") as run:
+                run.result = "error"
+                run.error = type(e).__name__
             logger.error(f"Alert evaluation cycle failed: {e}")
         await asyncio.sleep(interval)
 

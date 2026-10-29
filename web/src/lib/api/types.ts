@@ -438,5 +438,18 @@ export interface Diagnostics {
 	cloud_fallback_enabled: boolean;
 	cloud_device_count: number;
 	background_tasks: Record<string, string>;
+	recent_runs: JobRun[];
 	warnings: string[];
+}
+
+export interface JobRun {
+	job: string;
+	trigger: string;
+	target: string | null;
+	started_at: string;
+	duration_seconds: number;
+	result: 'success' | 'partial' | 'error' | 'missed' | 'skipped' | 'cancelled';
+	error: string | null;
+	status_code: number | null;
+	request_id: string | null;
 }

@@ -303,3 +303,25 @@ def test_apply_scene_service_seam_is_callable_without_http(
     result = asyncio.run(go())
     assert result.succeeded == ["10.0.0.1"]
     assert registry.get("10.0.0.1").is_on is True
+
+
+def test_scene_history_records_partial(client, monkeypatch):
+    from api.run_history import RunHistory
+
+    history = RunHistory()
+    monkeypatch.setattr(scene_service, "run_history", history)
+    scene = client.post(
+        "/api/scenes",
+        json={
+            "name": "Partial",
+            "entries": [
+                {"device_id": "10.0.0.1", "state": {"on": False}},
+                {"device_id": "missing", "state": {"on": True}},
+            ],
+        },
+    ).json()
+    client.post(f"/api/scenes/{scene['id']}/apply")
+    run = history.all()[0]
+    assert run.job == "scene" and run.target == scene["id"]
+    assert run.result == "partial"
+    assert run.error == "1 device(s) failed."

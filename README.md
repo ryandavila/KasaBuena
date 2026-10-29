@@ -352,8 +352,15 @@ failure remains not-ready until restart. Docker Compose checks readiness with a
 
 Open **Settings → Diagnostics** for app/library versions, the latest scan,
 per-device last-seen/error timestamps and consecutive failures, cloud fallback
-state and background-task state. **Copy report** copies the
+state, background-task state, and recent job results. **Copy report** copies the
 same JSON served by `GET /api/diagnostics`. It contains local host addresses and
 device IDs, but no credentials or webhook URLs. Unreachable cards show a reason
 on hover. Successful device reads reset the failure streak; the previous error
 and its timestamp remain available as history.
+
+The latest 200 completed job/delivery records are kept in memory, newest first:
+schedule runs (including missed one-shots), scene applications, vacation switches,
+and alert webhook deliveries with HTTP status, duration, and outcome. Failed
+background cycles also appear. Diagnostics highlights failed/missed schedules and
+sunrise/sunset schedules that lack a location. This history and device health
+reset on restart; existing saved schedules still retain their `last_fired` entry.

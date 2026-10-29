@@ -405,3 +405,21 @@ def test_put_persists_and_reports_status(client):
 def test_put_rejects_incoherent_intervals(client):
     payload = {"min_interval_minutes": 40, "max_interval_minutes": 5, "enabled": True}
     assert client.put("/api/vacation", json=payload).status_code == 422
+
+
+def test_vacation_history_records_failed_toggle(registry, groups, monkeypatch):
+    from api.run_history import RunHistory
+    from api.schemas import PowerResult
+
+    history = RunHistory()
+    monkeypatch.setattr(vacation, "run_history", history)
+    monkeypatch.setattr(
+        vacation,
+        "set_power_many",
+        AsyncMock(return_value=PowerResult(on=True, succeeded=[], failed=["10.0.0.1"])),
+    )
+    engine = _engine(None, registry, groups)
+    asyncio.run(engine._toggle(_local(20), "10.0.0.1", _config()))
+    run = history.all()[0]
+    assert run.job == "vacation" and run.trigger == "toggle"
+    assert run.target == "10.0.0.1" and run.result == "error"

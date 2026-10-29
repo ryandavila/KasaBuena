@@ -25,6 +25,7 @@ import datetime
 from . import solar
 from .kasa_service import set_power_many
 from .logging_config import get_logger
+from .run_history import run_history
 from .scene_service import SceneNotFoundError, apply_scene
 
 logger = get_logger(__name__)
@@ -319,6 +320,9 @@ async def run_tick(
         _warn_once_no_location(rules)
     ts = int(minute.timestamp())
     for rule in _missed_once_rules(rules, minute):
+        with run_history.track("schedule", "missed", rule["id"]) as run:
+            run.result = "missed"
+            run.error = "Scheduled time passed while the scheduler was unavailable."
         store.update_rule(
             rule["id"],
             {"enabled": False, "last_fired": {"ts": ts, "result": "missed"}},
@@ -327,7 +331,16 @@ async def run_tick(
     for rule in due_rules(rules, minute, location=location):
         if _fired_at_this_label_recently(rule, minute):
             continue  # DST fall-back repeat of an already-fired label
-        result = await fire_rule(rule, registry=registry, groups=groups)
+        with run_history.track("schedule", minute.isoformat(), rule["id"]) as run:
+            result = await fire_rule(rule, registry=registry, groups=groups)
+            if result.startswith("partial"):
+                run.result = "partial"
+                run.error = "Some target devices could not be controlled."
+            elif result != "ok":
+                run.result = "error"
+                run.error = (
+                    "Schedule action failed; check its target and device health."
+                )
         fields: dict = {"last_fired": {"ts": ts, "result": result}}
         if rule.get("kind") == "once":
             fields["enabled"] = False
@@ -384,5 +397,8 @@ async def run_scheduler(
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 - the scheduler must never crash startup
+            with run_history.track("scheduler", "timer") as run:
+                run.result = "error"
+                run.error = type(e).__name__
             logger.error(f"Scheduler cycle failed: {e}")
         await asyncio.sleep(_seconds_until_next_minute(now_fn()))

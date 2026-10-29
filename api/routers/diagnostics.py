@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from ..config import get_settings
 from ..kasa_service import registry
 from ..logging_config import request_id
+from ..run_history import run_history
 from ..schedule_store import schedules
 from ..schemas import Diagnostics
 
@@ -63,6 +64,14 @@ async def diagnostics(request: Request) -> Diagnostics:
         for name, state in states.items()
         if state in ("failed", "cancelled")
     )
+    for rule in rules:
+        result = (rule.get("last_fired") or {}).get("result", "")
+        if result == "missed":
+            warnings.append(f"Schedule {rule.get('id')} missed its scheduled time.")
+        elif result.startswith(("error", "partial")):
+            warnings.append(
+                f"Schedule {rule.get('id')} last run failed or only partly completed."
+            )
     return Diagnostics(
         app_version=package_version("kasabuena"),
         python_kasa_version=package_version("python-kasa"),
@@ -81,5 +90,6 @@ async def diagnostics(request: Request) -> Diagnostics:
         cloud_fallback_enabled=registry._cloud_client is not None,
         cloud_device_count=len(registry._cloud_devices),
         background_tasks=states,
+        recent_runs=run_history.all(),
         warnings=warnings,
     )

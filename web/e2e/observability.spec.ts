@@ -10,4 +10,5 @@ test('settings show diagnostics and a copyable report', async ({ page, request }
 	await expect(page.getByRole('button', { name: 'Copy report' })).toBeEnabled();
 	await page.getByText('Full report', { exact: true }).click();
 	await expect(page.getByLabel('Diagnostics JSON')).toHaveValue(/python_kasa_version/);
+	await expect(page.getByLabel('Diagnostics JSON')).toHaveValue(/recent_runs/);
 });

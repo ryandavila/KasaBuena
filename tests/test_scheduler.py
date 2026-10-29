@@ -617,3 +617,31 @@ def test_scheduler_survives_a_failing_cycle_and_is_cancellable(monkeypatch):
             await task
 
     asyncio.run(drive())
+
+
+def test_schedule_history_records_partial_and_missed(
+    registry, groups, tmp_path, monkeypatch
+):
+    from api.run_history import RunHistory
+
+    history = RunHistory()
+    monkeypatch.setattr(scheduler, "run_history", history)
+    monkeypatch.setattr(
+        scheduler, "fire_rule", AsyncMock(return_value="partial: 1 failed")
+    )
+    store = ScheduleStore(tmp_path / "s.json")
+    due = store.create_rule(_rule())
+    missed = store.create_rule(_once(at="2024-01-01T18:29"))
+    asyncio.run(
+        scheduler.run_tick(
+            store,
+            MONDAY_1830,
+            registry=registry,
+            groups=groups,
+            broadcaster=AsyncMock(),
+        )
+    )
+    results = {run.target: run for run in history.all()}
+    assert results[due["id"]].result == "partial"
+    assert results[missed["id"]].result == "missed"
+    assert all(run.duration_seconds >= 0 for run in results.values())

@@ -14,6 +14,8 @@ import asyncio
 
 from .events import broadcaster
 from .kasa_service import partition_results, registry
+from .logging_config import request_id
+from .run_history import run_history
 from .scene_store import scenes
 from .schemas import SceneApplyResult
 
@@ -54,17 +56,23 @@ async def apply_scene(scene_id: str) -> SceneApplyResult:
     404). This is the seam Schedules calls — importable and awaitable without
     going through HTTP.
     """
-    scene = scenes.get_scene(scene_id)
-    if scene is None:
-        raise SceneNotFoundError(scene_id)
-    entries: list[dict] = scene.get("entries", [])
-    results = await asyncio.gather(
-        *(_apply_entry(entry) for entry in entries),
-        return_exceptions=True,
-    )
-    succeeded, failed = partition_results(
-        [entry["device_id"] for entry in entries], results
-    )
-    # Push the aggregate change even on partial failure: devices did move.
-    await broadcaster.publish_now()
-    return SceneApplyResult(succeeded=succeeded, failed=failed)
+    with run_history.track(
+        "scene", "request" if request_id.get() else "schedule", scene_id
+    ) as run:
+        scene = scenes.get_scene(scene_id)
+        if scene is None:
+            raise SceneNotFoundError(scene_id)
+        entries: list[dict] = scene.get("entries", [])
+        results = await asyncio.gather(
+            *(_apply_entry(entry) for entry in entries),
+            return_exceptions=True,
+        )
+        succeeded, failed = partition_results(
+            [entry["device_id"] for entry in entries], results
+        )
+        if failed:
+            run.result = "partial" if succeeded else "error"
+            run.error = f"{len(failed)} device(s) failed."
+        # Push the aggregate change even on partial failure: devices did move.
+        await broadcaster.publish_now()
+        return SceneApplyResult(succeeded=succeeded, failed=failed)

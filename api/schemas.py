@@ -81,6 +81,20 @@ class DeviceHealth(BaseModel):
     consecutive_failures: int = 0
 
 
+class JobRun(BaseModel):
+    job: str
+    trigger: str
+    target: str | None = None
+    started_at: datetime.datetime
+    duration_seconds: float = 0
+    result: Literal["success", "partial", "error", "missed", "skipped", "cancelled"] = (
+        "success"
+    )
+    error: str | None = None
+    status_code: int | None = None
+    request_id: str | None = None
+
+
 class Diagnostics(BaseModel):
     app_version: str
     python_kasa_version: str
@@ -95,6 +109,7 @@ class Diagnostics(BaseModel):
     cloud_fallback_enabled: bool
     cloud_device_count: int
     background_tasks: dict[str, str]
+    recent_runs: list[JobRun] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 

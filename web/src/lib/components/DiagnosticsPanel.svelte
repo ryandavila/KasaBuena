@@ -90,6 +90,27 @@
 				</table>
 			</div>
 		</details>
+		<details class="mt-3 text-sm text-muted">
+			<summary class="cursor-pointer"
+				>Recent jobs and deliveries ({report.recent_runs.length})</summary
+			>
+			<div class="overflow-x-auto">
+				<table class="mt-2 w-full text-left text-xs">
+					<thead><tr><th>When</th><th>Job / trigger</th><th>Result</th></tr></thead>
+					<tbody
+						>{#each report.recent_runs as run, i (i)}<tr>
+								<td class="p-2">{date(run.started_at)}</td>
+								<td class="p-2">{run.job} / {run.trigger}<br />{run.target ?? ''}</td>
+								<td class="p-2"
+									>{run.result}{run.status_code ? ` (HTTP ${run.status_code})` : ''} · {run.duration_seconds.toFixed(
+										2
+									)}s<br />{run.error ?? ''}</td
+								>
+							</tr>{/each}</tbody
+					>
+				</table>
+			</div>
+		</details>
 
 		<details class="mt-3 text-sm text-muted">
 			<summary class="cursor-pointer">Full report</summary>

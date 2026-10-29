@@ -32,4 +32,5 @@ ENV PYTHONUNBUFFERED=1 \
     KASA_PORT=8080 \
     KASA_LOG_FORMAT=json
 
-CMD ["uv", "run", "python", "-m", "api.main"]
+# Dependencies are installed during the build; never sync dev tools at startup.
+CMD ["uv", "run", "--no-sync", "python", "-m", "api.main"]

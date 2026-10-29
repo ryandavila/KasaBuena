@@ -16,6 +16,7 @@
 <article
 	class="animate-rise relative overflow-hidden rounded-card border border-dashed border-line bg-surface/40 p-5 opacity-75 transition-all duration-500"
 	style="animation-delay: {delay}ms;"
+	title={device.unreachable_reason ?? 'Device did not answer the latest discovery.'}
 >
 	<header class="flex items-start gap-4">
 		<div

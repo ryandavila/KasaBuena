@@ -10,6 +10,7 @@ from ._helpers import _validated_rows
 from .alerts import router as alerts_router
 from .backup import router as backup_router
 from .devices import router as devices_router
+from .diagnostics import router as diagnostics_router
 from .energy import router as energy_router
 from .groups import router as groups_router
 from .scenes import router as scenes_router
@@ -21,6 +22,7 @@ __all__ = [
     "alerts_router",
     "backup_router",
     "devices_router",
+    "diagnostics_router",
     "energy_router",
     "groups_router",
     "scenes_router",

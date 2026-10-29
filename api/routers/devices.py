@@ -58,7 +58,12 @@ async def list_devices() -> list[Device]:
     # Append known-but-unreachable devices so they stay visible (grayed) instead
     # of disappearing from rooms/favorites.
     return [
-        serialize_device(d, reachable=registry.is_reachable(d)) for d in registry.all()
+        serialize_device(
+            d,
+            reachable=registry.is_reachable(d),
+            unreachable_reason=registry.unreachable_reason(d.host),
+        )
+        for d in registry.all()
     ] + registry.unreachable_devices()
 
 
@@ -66,7 +71,11 @@ async def list_devices() -> list[Device]:
 async def state() -> list[Device]:
     """Cached devices with live state refreshed from the hardware."""
     live = [
-        serialize_device(d, reachable=registry.is_reachable(d))
+        serialize_device(
+            d,
+            reachable=registry.is_reachable(d),
+            unreachable_reason=registry.unreachable_reason(d.host),
+        )
         for d in await registry.refresh_all()
     ]
     return live + registry.unreachable_devices()

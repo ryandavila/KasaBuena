@@ -18,6 +18,7 @@ vi.mock('$lib/api/client', () => {
 		listDevices: vi.fn(),
 		getState: vi.fn(),
 		getStatus: vi.fn(),
+		getDiagnostics: vi.fn(),
 		discoverDevices: vi.fn(),
 		scanSubnet: vi.fn(),
 		setPower: vi.fn(),

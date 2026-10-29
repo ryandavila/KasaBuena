@@ -39,7 +39,11 @@ def _frame(devices: list) -> str:
     stays a flat JSON array the client already merges, just extended.
     """
     items = [
-        serialize_device(d, reachable=registry.is_reachable(d)).model_dump()
+        serialize_device(
+            d,
+            reachable=registry.is_reachable(d),
+            unreachable_reason=registry.unreachable_reason(d.host),
+        ).model_dump()
         for d in devices
     ]
     items += [d.model_dump() for d in registry.unreachable_devices()]

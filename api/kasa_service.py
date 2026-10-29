@@ -5,6 +5,7 @@ import ipaddress
 import logging
 import time
 from colorsys import hsv_to_rgb, rgb_to_hsv
+from datetime import UTC, datetime
 from functools import wraps
 from typing import Any, NamedTuple
 
@@ -26,6 +27,7 @@ from .logging_config import get_logger, log_context
 from .schemas import (
     ChildPlug,
     Device,
+    DeviceHealth,
     Hsv,
     PowerResult,
     ScanReport,
@@ -148,6 +150,10 @@ def _device_operation(method):
                 logger.debug("Device operation unavailable (%s)", type(error).__name__)
                 raise
             except Exception as error:  # noqa: BLE001 - log then preserve API semantics
+                if device is not None:
+                    self._health_failure(
+                        device.host, type(error).__name__, "Device operation failed."
+                    )
                 logger.error("Device operation failed (%s)", type(error).__name__)
                 raise
             logger.log(
@@ -162,6 +168,10 @@ def _device_operation(method):
 def _device_read(method):
     @wraps(method)
     async def wrapped(self, device, *args, **kwargs):
+        self.device_health.setdefault(
+            device.host,
+            DeviceHealth(device_id=stable_device_id(device), host=device.host),
+        )
         with log_context(device_id=stable_device_id(device), host=device.host):
             return await method(self, device, *args, **kwargs)
 
@@ -228,6 +238,10 @@ class DeviceRegistry:
         # hint about them when the fallback is off.
         self._unreadable_hosts: set[str] = set()
         self.last_scan = ScanReport()
+        self.last_scan_at: datetime | None = None
+        self.device_health: dict[str, DeviceHealth] = {}
+        self.startup_complete = False
+        self.startup_error: str | None = None
         # True while the initial sweep runs; exposed via /api/status so the UI
         # shows "scanning…" instead of an empty list (the sweep runs in the
         # background so the API serves immediately).
@@ -278,6 +292,35 @@ class DeviceRegistry:
             except Exception as e:  # noqa: BLE001 - migration must never break discovery
                 logger.warning(f"Energy id migration {host} -> {stable_id} failed: {e}")
 
+    @property
+    def ready(self) -> bool:
+        return self.startup_complete and self.startup_error is None
+
+    def _health_success(self, device) -> None:
+        health = self.device_health.setdefault(
+            device.host,
+            DeviceHealth(device_id=stable_device_id(device), host=device.host),
+        )
+        health.device_id = stable_device_id(device)
+        health.last_seen = datetime.now(UTC)
+        health.consecutive_failures = 0
+
+    def _health_failure(self, host: str, error_class: str, detail: str) -> None:
+        snapshot = self._snapshots.get(host)
+        health = self.device_health.setdefault(
+            host, DeviceHealth(device_id=snapshot.id if snapshot else host, host=host)
+        )
+        health.last_error_at = datetime.now(UTC)
+        health.last_error = detail
+        health.error_class = error_class
+        health.consecutive_failures += 1
+
+    def unreachable_reason(self, host: str) -> str:
+        health = self.device_health.get(host)
+        if health and health.consecutive_failures:
+            return health.last_error or "Device could not be reached."
+        return "Device did not answer the latest discovery."
+
     @_device_read
     async def _refresh(self, device: KasaDevice) -> bool:
         """Pull live state. Returns False if the device couldn't be read.
@@ -293,15 +336,22 @@ class DeviceRegistry:
         except AuthenticationError as e:
             # Expected for devices that dropped local auth (e.g. HS300 strips);
             # handled via the cloud fallback, so not a hard error.
+            self._health_failure(
+                device.host, type(e).__name__, "Local authentication failed."
+            )
             logger.debug(f"Local auth failed for {device.host}: {e}")
             ok = False
         except Exception as e:  # noqa: BLE001 - one bad device shouldn't break the rest
+            self._health_failure(
+                device.host, type(e).__name__, "Device state could not be read."
+            )
             logger.warning("Device refresh failed (%s)", type(e).__name__)
             ok = False
         else:
             ok = True
         device_id = stable_device_id(device)
         if ok:
+            self._health_success(device)
             self._miss_counts.pop(device_id, None)
         else:
             self._miss_counts[device_id] = self._miss_counts.get(device_id, 0) + 1
@@ -406,10 +456,14 @@ class DeviceRegistry:
         except Exception as error:  # noqa: BLE001 - isolate each responding host
             logger.debug("Discovery read failed (%s)", type(error).__name__)
             skipped[device.host] = self._skip(device.host, error, reading=True)
+            self._health_failure(
+                device.host, type(error).__name__, skipped[device.host].detail
+            )
             self._unreadable_hosts.add(device.host)
             await self._safe_disconnect(device)
         else:
             await self._store_device(device)
+            self._health_success(device)
             self._miss_counts.pop(stable_device_id(device), None)
             self._unreadable_hosts.discard(device.host)
             skipped.pop(device.host, None)
@@ -418,6 +472,7 @@ class DeviceRegistry:
     async def _scan_host(self, host, found, skipped, timeout=2):
         async def unsupported(error):
             skipped[host] = self._skip(host, error)
+            self._health_failure(host, type(error).__name__, skipped[host].detail)
 
         try:
             device = await Discover.discover_single(
@@ -427,9 +482,16 @@ class DeviceRegistry:
                 on_unsupported=unsupported,
             )
         except TimeoutError:
+            if host in self.device_health or (
+                self._store and host in self._store.load()
+            ):
+                self._health_failure(
+                    host, "TimeoutError", "Device did not answer discovery."
+                )
             return
         except (UnsupportedDeviceError, AuthenticationError) as error:
             skipped[host] = self._skip(host, error)
+            self._health_failure(host, type(error).__name__, skipped[host].detail)
             if isinstance(error, AuthenticationError):
                 self._unreadable_hosts.add(host)
         except Exception as error:  # noqa: BLE001 - isolate unexpected probe failures
@@ -439,6 +501,7 @@ class DeviceRegistry:
                 extra={"host": host},
             )
             skipped[host] = self._skip(host, error)
+            self._health_failure(host, type(error).__name__, skipped[host].detail)
         else:
             if device is not None:
                 await self._accept_scan_device(device, found, skipped)
@@ -483,6 +546,7 @@ class DeviceRegistry:
             report.stats.duration_seconds,
         )
         self.last_scan = report
+        self.last_scan_at = datetime.now(UTC)
         self._persist()
         return report
 
@@ -495,6 +559,7 @@ class DeviceRegistry:
         async def unsupported(error):
             host = error.host or "unknown"
             skipped[host] = self._skip(host, error)
+            self._health_failure(host, type(error).__name__, skipped[host].detail)
 
         discovered = await Discover.discover(
             credentials=self._credentials, on_unsupported=unsupported
@@ -521,6 +586,8 @@ class DeviceRegistry:
         ``discovering`` flag lets the frontend show progress. Never raises.
         """
         self.discovering = True
+        self.startup_complete = False
+        self.startup_error = None
         try:
             await self.discover_all()
             if self.scan_subnet:
@@ -530,8 +597,10 @@ class DeviceRegistry:
             await self.attach_cloud()
             self.log_cloud_fallback_hint()
         except Exception as e:  # noqa: BLE001 - never let startup discovery crash
+            self.startup_error = type(e).__name__
             logger.error(f"Initial discovery failed: {e}")
         finally:
+            self.startup_complete = True
             self.discovering = False
 
     async def discover_target(self, target: str) -> ScanReport:
@@ -661,7 +730,11 @@ class DeviceRegistry:
             snapshot = self._snapshots.get(host) or self._host_only_snapshot(host)
             if snapshot.id in live_ids:
                 continue
-            result.append(snapshot)
+            result.append(
+                snapshot.model_copy(
+                    update={"unreachable_reason": self.unreachable_reason(host)}
+                )
+            )
         return result
 
     def get(self, device_id: str) -> KasaDevice:
@@ -743,6 +816,7 @@ class DeviceRegistry:
             # cloud control keeps its identity (and data).
             stable_id = stable_device_id(device)
             self._cloud_devices[stable_id] = device
+            self._health_success(device)
             self._migrate_identity(device.host, stable_id)
         # State was just read during the attach; reset the poll throttle.
         self._last_cloud_refresh = time.monotonic()
@@ -1065,7 +1139,9 @@ def _build_usage(
     )
 
 
-def serialize_device(device: KasaDevice, *, reachable: bool = True) -> Device:
+def serialize_device(
+    device: KasaDevice, *, reachable: bool = True, unreachable_reason: str | None = None
+) -> Device:
     """Convert a python-kasa device into the API schema.
 
     ``reachable`` lets list/stream callers mark a cached device whose refreshes
@@ -1104,6 +1180,7 @@ def serialize_device(device: KasaDevice, *, reachable: bool = True) -> Device:
         hsv=hsv,
         children=children,
         reachable=reachable,
+        unreachable_reason=unreachable_reason if not reachable else None,
         # python-kasa devices expose set_alias; the cloud façade doesn't, so its
         # absence means "can't be renamed here". A strip is uniformly local or
         # cloud, so this flag also gates its per-outlet rename in the UI.

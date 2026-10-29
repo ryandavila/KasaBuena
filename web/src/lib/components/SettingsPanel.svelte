@@ -2,6 +2,7 @@
 	import { dismissable } from '$lib/actions/dismissable';
 	import { backupStore } from '$lib/stores/backup.svelte';
 	import Icon from './Icon.svelte';
+	import DiagnosticsPanel from './DiagnosticsPanel.svelte';
 
 	// The gear button + modal are self-contained here (no parent-managed open
 	// state) so any future settings section only needs to add a block below,
@@ -170,6 +171,7 @@
 						{/if}
 					</section>
 
+					<DiagnosticsPanel />
 					<!-- ── Energy history ──────────────────────────────────────────── -->
 					<section class="px-5 py-4">
 						<h3 class="font-display text-sm font-semibold text-ink">Energy history</h3>

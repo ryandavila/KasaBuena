@@ -3,6 +3,7 @@ import type {
 	AlertThresholds,
 	BackupDocument,
 	Device,
+	Diagnostics,
 	ScanReport,
 	EnergyHistory,
 	EnergyInsights,
@@ -269,3 +270,5 @@ export const getVacation = () => request<VacationStatus>('/vacation');
 
 /** Full-replace the vacation config; returns the saved config with fresh status. */
 export const setVacation = (config: VacationConfig) => put<VacationStatus>('/vacation', config);
+
+export const getDiagnostics = () => request<Diagnostics>('/diagnostics');

@@ -3,6 +3,7 @@ import {
 	listDevices,
 	getState,
 	getStatus,
+	getDiagnostics,
 	discoverDevices,
 	scanSubnet,
 	setPower,
@@ -117,6 +118,7 @@ class DeviceStore {
 			this.discovering = false;
 		}
 		if (this.discovering) this.monitorDiscovery();
+		else await this.loadScanReport();
 	}
 
 	/**
@@ -130,12 +132,21 @@ class DeviceStore {
 				const [devices, status] = await Promise.all([listDevices(), getStatus()]);
 				this.merge(devices);
 				this.discovering = status.discovering;
+				if (!this.discovering) await this.loadScanReport();
 			} catch {
 				// transient; keep watching until the server answers
 			}
 			this.discoveryTimer = this.discovering ? setTimeout(tick, intervalMs) : null;
 		};
 		this.discoveryTimer = setTimeout(tick, intervalMs);
+	}
+
+	private async loadScanReport() {
+		try {
+			this.lastScan = (await getDiagnostics()).last_scan;
+		} catch {
+			/* diagnostics are best-effort; device loading still succeeds */
+		}
 	}
 
 	/** Silently re-read live state from the hub; never disrupts the UI on failure. */

@@ -32,6 +32,7 @@ from .routers import (
     alerts_router,
     backup_router,
     devices_router,
+    diagnostics_router,
     energy_router,
     groups_router,
     scenes_router,
@@ -71,6 +72,8 @@ async def lifespan(app: FastAPI):
 
         logger.warning("KASA_FAKE_DEVICES set; serving in-process fake devices")
         seed_registry(registry)
+        registry.startup_complete = True
+        registry.startup_error = None
         settings = get_settings()
         recorder = asyncio.create_task(
             run_recorder(registry, history, settings.kasa_energy_sample_interval)
@@ -87,6 +90,7 @@ async def lifespan(app: FastAPI):
             )
         )
         tasks: tuple[asyncio.Task, ...] = (recorder, alerts)
+        app.state.background_tasks = {"energy_recorder": recorder, "alerts": alerts}
     else:
         # Discovery takes many seconds; run it in the background so the API serves
         # immediately (the frontend watches registry.discovering via /api/status).
@@ -131,11 +135,19 @@ async def lifespan(app: FastAPI):
         # occupied. Idle (a cheap no-op tick) until the user turns it on.
         vacation = asyncio.create_task(vacation_engine.run())
         tasks = (discovery, recorder, scheduler, alerts, vacation)
+        app.state.background_tasks = {
+            "discovery": discovery,
+            "energy_recorder": recorder,
+            "scheduler": scheduler,
+            "alerts": alerts,
+            "vacation": vacation,
+        }
     yield
     for task in tasks:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+    registry.startup_complete = False
     await registry.aclose()
 
 
@@ -168,6 +180,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RequestValidationError, correlated_validation_error)
 
     app.include_router(devices_router)
+    app.include_router(diagnostics_router)
     app.include_router(energy_router)
     app.include_router(groups_router)
     app.include_router(scenes_router)

@@ -31,6 +31,9 @@ class FakeRegistry:
         # This fake serves only live devices with no miss tracking.
         return True
 
+    def unreachable_reason(self, host):
+        return "Device did not answer discovery."
+
     def unreachable_devices(self) -> list:
         # The broadcaster appends these to every frame; this fake serves only live
         # devices, so there are none.

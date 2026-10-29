@@ -38,6 +38,7 @@ class Device(BaseModel):
         "the API. False for cloud-only devices (e.g. HS300 strips) whose façade "
         "has no set_alias; the UI hides the rename affordance for them.",
     )
+    unreachable_reason: str | None = None
     reachable: bool = Field(
         default=True,
         description="False for a known device that didn't answer discovery: it's "
@@ -68,6 +69,33 @@ class ScanReport(BaseModel):
     devices: list[Device] = Field(default_factory=list)
     skipped: list[SkippedHost] = Field(default_factory=list)
     stats: ScanStats = Field(default_factory=ScanStats)
+
+
+class DeviceHealth(BaseModel):
+    device_id: str
+    host: str
+    last_seen: datetime.datetime | None = None
+    last_error_at: datetime.datetime | None = None
+    last_error: str | None = None
+    error_class: str | None = None
+    consecutive_failures: int = 0
+
+
+class Diagnostics(BaseModel):
+    app_version: str
+    python_kasa_version: str
+    ready: bool
+    startup_error: str | None
+    discovering: bool
+    last_scan_at: datetime.datetime | None
+    last_scan: ScanReport | None
+    devices: list[DeviceHealth]
+    unreadable_hosts: list[str]
+    unsupported_hosts: list[str]
+    cloud_fallback_enabled: bool
+    cloud_device_count: int
+    background_tasks: dict[str, str]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class UsageStat(BaseModel):

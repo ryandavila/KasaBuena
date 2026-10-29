@@ -342,3 +342,18 @@ Background work has no request ID. Correlation stays local to each async task.
 Log levels: INFO for completed state changes and scan summaries; WARNING for
 handled degradation; ERROR for failed operations; DEBUG for read/probe details
 and tolerated exceptions. Ordinary discovery timeouts remain silent.
+
+### Readiness and diagnostics
+
+`GET /api/health` is process liveness. `GET /api/ready` returns 503 until startup
+initialization and discovery complete successfully, then 200. An initialization
+failure remains not-ready until restart. Docker Compose checks readiness with a
+60-second start period; large subnet sweeps may need a longer period.
+
+Open **Settings → Diagnostics** for app/library versions, the latest scan,
+per-device last-seen/error timestamps and consecutive failures, cloud fallback
+state and background-task state. **Copy report** copies the
+same JSON served by `GET /api/diagnostics`. It contains local host addresses and
+device IDs, but no credentials or webhook URLs. Unreachable cards show a reason
+on hover. Successful device reads reset the failure streak; the previous error
+and its timestamp remain available as history.

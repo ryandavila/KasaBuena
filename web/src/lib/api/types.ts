@@ -43,6 +43,7 @@ export interface Device {
 	 * affordance flips it back once the device answers.
 	 */
 	reachable: boolean;
+	unreachable_reason?: string | null;
 }
 
 /** One bar in an energy chart — a day or a month. */
@@ -412,4 +413,30 @@ export interface ScanReport {
 	devices: Device[];
 	skipped: SkippedHost[];
 	stats: { hosts_probed: number | null; responded: number; duration_seconds: number };
+}
+
+export interface DeviceHealth {
+	device_id: string;
+	host: string;
+	last_seen: string | null;
+	last_error_at: string | null;
+	last_error: string | null;
+	error_class: string | null;
+	consecutive_failures: number;
+}
+export interface Diagnostics {
+	app_version: string;
+	python_kasa_version: string;
+	ready: boolean;
+	startup_error: string | null;
+	discovering: boolean;
+	last_scan_at: string | null;
+	last_scan: ScanReport | null;
+	devices: DeviceHealth[];
+	unreadable_hosts: string[];
+	unsupported_hosts: string[];
+	cloud_fallback_enabled: boolean;
+	cloud_device_count: number;
+	background_tasks: Record<string, string>;
+	warnings: string[];
 }

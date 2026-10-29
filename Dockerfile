@@ -7,7 +7,7 @@ COPY web/ ./
 RUN bun run build
 
 # Stage 2: Python runtime that serves the API and the built frontend.
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 

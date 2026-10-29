@@ -324,3 +324,21 @@ server and browser memory, replaced by the next scan, and is not persisted or
 added to `/api/status`. The Scan tab retains its report when switching tabs.
 TPAP entries link to the bundled [protocol note](web/static/discovery-help.html).
 Log naming, diagnostics, metrics, tracing, and cloud controls are unchanged.
+
+### Logs and request correlation
+
+Set `KASA_LOG_FORMAT=text|json` and `KASA_LOG_LEVEL=DEBUG|INFO|WARNING|ERROR|CRITICAL`.
+Local runs default to text/INFO; the Docker image defaults to JSON/INFO. Console,
+rotating file, and uvicorn access/error logs use the same format. Logs now go to
+`logs/kasabuena.log` (10 MiB, five backups); existing `kasa_nice.log` files are
+left intact. Update any log collectors that watch the old filename.
+
+Every HTTP response includes `X-Request-ID`. Clients may supply an ID containing
+1–128 ASCII letters, digits, `.`, `_`, `:`, or `-`; missing or invalid IDs are
+replaced. API error JSON includes `request_id` alongside `detail`. Logs carry the
+request ID and, during device operations, `device_id`, `host`, and `operation`.
+Background work has no request ID. Correlation stays local to each async task.
+
+Log levels: INFO for completed state changes and scan summaries; WARNING for
+handled degradation; ERROR for failed operations; DEBUG for read/probe details
+and tolerated exceptions. Ordinary discovery timeouts remain silent.

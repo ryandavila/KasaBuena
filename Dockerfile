@@ -29,6 +29,7 @@ EXPOSE 8080
 
 ENV PYTHONUNBUFFERED=1 \
     KASA_HOST=0.0.0.0 \
-    KASA_PORT=8080
+    KASA_PORT=8080 \
+    KASA_LOG_FORMAT=json
 
 CMD ["uv", "run", "python", "-m", "api.main"]

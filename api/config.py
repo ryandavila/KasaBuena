@@ -16,6 +16,7 @@ repo-root ``.env`` can't leak in.
 """
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -72,6 +73,9 @@ class Settings(BaseSettings):
     # Optional CIDR swept by unicast on startup, for devices on a separate VLAN
     # that broadcast discovery can't reach. None disables the sweep.
     kasa_scan_subnet: str | None = None
+
+    kasa_log_format: Literal["text", "json"] = "text"
+    kasa_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # ── Persistence paths (mount these as volumes to survive rebuilds) ────────
     kasa_state_file: Path = Path("data/known_devices.json")

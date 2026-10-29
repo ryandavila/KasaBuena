@@ -5,8 +5,10 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.exceptions import HTTPException
 
 from .alerts import (
     alert_center,
@@ -21,6 +23,11 @@ from .events import router as events_router
 from .group_store import groups
 from .kasa_service import registry
 from .logging_config import get_logger, setup_logging
+from .request_logging import (
+    RequestIDMiddleware,
+    correlated_http_error,
+    correlated_validation_error,
+)
 from .routers import (
     alerts_router,
     backup_router,
@@ -48,7 +55,8 @@ WEB_BUILD_DIR = Path(__file__).resolve().parent.parent / "web" / "build"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    setup_logging()
+    settings = get_settings()
+    setup_logging(settings.kasa_log_level, settings.kasa_log_format)
     logger.info("Starting KasaBuena API")
     if get_settings().kasa_fake_devices:
         # Test-only seam: seed fakes instead of scanning. One flips its state on
@@ -152,7 +160,12 @@ def create_app() -> FastAPI:
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Request-ID"],
     )
+
+    app.add_middleware(RequestIDMiddleware)
+    app.add_exception_handler(HTTPException, correlated_http_error)
+    app.add_exception_handler(RequestValidationError, correlated_validation_error)
 
     app.include_router(devices_router)
     app.include_router(energy_router)
@@ -179,8 +192,9 @@ def run() -> None:
     import uvicorn
 
     settings = get_settings()
+    setup_logging(settings.kasa_log_level, settings.kasa_log_format)
     logger.info(f"Running on {settings.kasa_host}:{settings.kasa_port}")
-    uvicorn.run(app, host=settings.kasa_host, port=settings.kasa_port)
+    uvicorn.run(app, host=settings.kasa_host, port=settings.kasa_port, log_config=None)
 
 
 if __name__ == "__main__":

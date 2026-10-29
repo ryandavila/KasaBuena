@@ -2,8 +2,10 @@
 
 import asyncio
 import ipaddress
+import logging
 import time
 from colorsys import hsv_to_rgb, rgb_to_hsv
+from functools import wraps
 from typing import Any, NamedTuple
 
 from kasa import Credentials, Discover, Module
@@ -20,7 +22,7 @@ from .config import Settings, get_settings
 from .device_store import DeviceSnapshotStore, HostStore
 from .energy_history import EnergyHistoryStore, history
 from .group_store import GroupStore, groups
-from .logging_config import get_logger
+from .logging_config import get_logger, log_context
 from .schemas import (
     ChildPlug,
     Device,
@@ -121,6 +123,49 @@ class EnergySnapshot(NamedTuple):
 
     power_w: float | None
     today_kwh: float | None
+
+
+def _device_operation(method):
+    """Carry device identity through concurrent commands, reads and library logs."""
+
+    @wraps(method)
+    async def wrapped(self, device_id, *args, **kwargs):
+        # Resolve without raising so failed lookups still get a correlated log.
+        device = self._devices.get(device_id) or self._cloud_devices.get(device_id)
+        with log_context(
+            device_id=device_id,
+            host=getattr(device, "host", ""),
+            operation=method.__name__,
+        ):
+            try:
+                result = await method(self, device_id, *args, **kwargs)
+            except (
+                DeviceNotFoundError,
+                EnergyUnsupportedError,
+                RenameUnsupportedError,
+            ) as error:
+                # Missing capabilities/targets are expected API outcomes, not failed reads.
+                logger.debug("Device operation unavailable (%s)", type(error).__name__)
+                raise
+            except Exception as error:  # noqa: BLE001 - log then preserve API semantics
+                logger.error("Device operation failed (%s)", type(error).__name__)
+                raise
+            logger.log(
+                logging.INFO if method.__name__.startswith("set_") else logging.DEBUG,
+                "Device operation completed",
+            )
+            return result
+
+    return wrapped
+
+
+def _device_read(method):
+    @wraps(method)
+    async def wrapped(self, device, *args, **kwargs):
+        with log_context(device_id=stable_device_id(device), host=device.host):
+            return await method(self, device, *args, **kwargs)
+
+    return wrapped
 
 
 class DeviceRegistry:
@@ -233,6 +278,7 @@ class DeviceRegistry:
             except Exception as e:  # noqa: BLE001 - migration must never break discovery
                 logger.warning(f"Energy id migration {host} -> {stable_id} failed: {e}")
 
+    @_device_read
     async def _refresh(self, device: KasaDevice) -> bool:
         """Pull live state. Returns False if the device couldn't be read.
 
@@ -250,7 +296,7 @@ class DeviceRegistry:
             logger.debug(f"Local auth failed for {device.host}: {e}")
             ok = False
         except Exception as e:  # noqa: BLE001 - one bad device shouldn't break the rest
-            logger.error(f"Error updating device {device.host}: {e}")
+            logger.warning("Device refresh failed (%s)", type(e).__name__)
             ok = False
         else:
             ok = True
@@ -353,10 +399,12 @@ class DeviceRegistry:
             encrypt_type=(metadata.get("mgt_encrypt_schm") or {}).get("encrypt_type"),
         )
 
+    @_device_read
     async def _accept_scan_device(self, device, found, skipped):
         try:
             await device.update()
         except Exception as error:  # noqa: BLE001 - isolate each responding host
+            logger.debug("Discovery read failed (%s)", type(error).__name__)
             skipped[device.host] = self._skip(device.host, error, reading=True)
             self._unreadable_hosts.add(device.host)
             await self._safe_disconnect(device)
@@ -385,6 +433,11 @@ class DeviceRegistry:
             if isinstance(error, AuthenticationError):
                 self._unreadable_hosts.add(host)
         except Exception as error:  # noqa: BLE001 - isolate unexpected probe failures
+            logger.debug(
+                "Discovery probe failed (%s)",
+                type(error).__name__,
+                extra={"host": host},
+            )
             skipped[host] = self._skip(host, error)
         else:
             if device is not None:
@@ -416,6 +469,7 @@ class DeviceRegistry:
                     entry.model,
                     entry.device_type,
                     entry.encrypt_type,
+                    extra={"host": entry.host},
                 )
         logger.info(
             "Scan probed=%s responded=%s found=%s unsupported=%s auth_failed=%s unreadable=%s error=%s duration=%.3fs",
@@ -709,7 +763,12 @@ class DeviceRegistry:
         async def probe(host: str) -> None:
             try:
                 device = await Discover.discover_single(host)
-            except Exception:  # noqa: BLE001 - host may be offline
+            except Exception as error:  # noqa: BLE001 - host may be offline
+                logger.debug(
+                    "Known-host probe failed (%s)",
+                    type(error).__name__,
+                    extra={"host": host},
+                )
                 return
             if mac := getattr(device, "mac", None):
                 result[_norm_mac(mac)] = host
@@ -757,24 +816,28 @@ class DeviceRegistry:
             raise DeviceNotFoundError(f"{device.host} has no light module")
         return light
 
+    @_device_operation
     async def set_power(self, device_id: str, on: bool) -> KasaDevice:
         device = self.get(device_id)
         await (device.turn_on() if on else device.turn_off())
         await self._refresh(device)
         return device
 
+    @_device_operation
     async def set_brightness(self, device_id: str, value: int) -> KasaDevice:
         device = self.get(device_id)
         await self._light(device).set_brightness(value)
         await self._refresh(device)
         return device
 
+    @_device_operation
     async def set_hsv(self, device_id: str, hsv: Hsv) -> KasaDevice:
         device = self.get(device_id)
         await self._light(device).set_hsv(*hsv)
         await self._refresh(device)
         return device
 
+    @_device_operation
     async def get_usage(self, device_id: str) -> Usage:
         """Energy-monitoring data for a device: live power plus history.
 
@@ -816,6 +879,7 @@ class DeviceRegistry:
             rate=self.energy_rate,
         )
 
+    @_device_operation
     async def read_energy_snapshot(self, device_id: str) -> EnergySnapshot:
         """Cheap, scalar-only energy read for the background recorder.
 
@@ -849,6 +913,7 @@ class DeviceRegistry:
             today_kwh=_safe_energy_value(energy, "consumption_today"),
         )
 
+    @_device_operation
     async def set_child_power(
         self, device_id: str, child_id: str, on: bool
     ) -> KasaDevice:
@@ -865,6 +930,7 @@ class DeviceRegistry:
                 return device
         raise DeviceNotFoundError(f"{device_id}/{child_id}")
 
+    @_device_operation
     async def set_alias(self, device_id: str, alias: str) -> KasaDevice:
         """Rename a device, then refresh so the new alias is reflected.
 
@@ -880,6 +946,7 @@ class DeviceRegistry:
         await self._refresh(device)
         return device
 
+    @_device_operation
     async def set_child_alias(
         self, device_id: str, child_id: str, alias: str
     ) -> KasaDevice:
@@ -909,7 +976,8 @@ def _safe_energy_value(energy, name: str) -> float | None:
     """
     try:
         value = getattr(energy, name)
-    except Exception:  # noqa: BLE001 - a missing reading is data, not an error
+    except Exception as error:  # noqa: BLE001 - a missing reading is data, not an error
+        logger.debug("Energy scalar %s unavailable (%s)", name, type(error).__name__)
         return None
     return float(value) if value is not None else None
 

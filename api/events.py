@@ -18,7 +18,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from .kasa_service import registry, serialize_device
-from .logging_config import get_logger
+from .logging_config import background_context, get_logger
 
 logger = get_logger(__name__)
 
@@ -73,7 +73,7 @@ class _Broadcaster:
         queue: asyncio.Queue[str] = asyncio.Queue()
         self._subscribers.add(queue)
         if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._run())
+            self._task = asyncio.create_task(self._run(), context=background_context())
         return queue
 
     def unsubscribe(self, queue: asyncio.Queue[str]) -> None:

@@ -364,8 +364,12 @@ class CloudDevice:
                             "the wrong day/month. Resync the device clock in the "
                             "Kasa app."
                         )
-                except Exception:  # noqa: BLE001 - never break on a bad clock
-                    pass
+                except Exception as error:  # noqa: BLE001 - never break on a bad clock
+                    logger.debug(
+                        "Cloud clock validation failed (%s)",
+                        type(error).__name__,
+                        extra={"host": self.host},
+                    )
         except Exception as e:  # noqa: BLE001 - fall back to the server clock
             logger.warning(f"Cloud device {self.host} clock read failed ({e})")
             now = datetime.now()

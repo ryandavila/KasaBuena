@@ -16,7 +16,10 @@ from typing import Any
 
 from .config import get_settings
 from .json_store import JsonDocumentStore
+from .logging_config import get_logger
 from .schemas import VacationConfig
+
+logger = get_logger(__name__)
 
 
 class VacationStore(JsonDocumentStore):
@@ -39,7 +42,8 @@ class VacationStore(JsonDocumentStore):
             return self._empty()
         try:
             return VacationConfig(**data).model_dump()
-        except Exception:  # noqa: BLE001 - a bad file is data loss, not a crash
+        except Exception as error:  # noqa: BLE001 - a bad file is data loss, not a crash
+            logger.debug("Vacation config rejected (%s)", type(error).__name__)
             return self._empty()
 
     def load(self) -> VacationConfig:

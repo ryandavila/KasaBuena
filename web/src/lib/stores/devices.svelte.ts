@@ -1,3 +1,4 @@
+import type { ScanReport } from '$lib/api/types';
 import {
 	listDevices,
 	getState,
@@ -34,6 +35,7 @@ class DeviceStore {
 	live = $state(true);
 	/** True while the server's initial network sweep is still running. */
 	discovering = $state(false);
+	lastScan = $state<ScanReport | null>(null);
 
 	private pollTimer: ReturnType<typeof setInterval> | null = null;
 	private discoveryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -210,7 +212,8 @@ class DeviceStore {
 	async rediscover() {
 		this.status = 'loading';
 		try {
-			this.devices = await discoverDevices();
+			this.lastScan = await discoverDevices();
+			this.devices = this.lastScan.devices;
 			this.status = 'ready';
 			toasts.push(`Found ${this.devices.length} devices`, 'info');
 		} catch (e) {
@@ -221,9 +224,10 @@ class DeviceStore {
 	}
 
 	/** Probe a single LAN address; merges results into the list. */
-	async discoverTarget(target: string): Promise<Device[]> {
+	async discoverTarget(target: string): Promise<ScanReport> {
 		const found = await discoverDevices(target);
-		for (const d of found) this.replace(d);
+		for (const d of found.devices) this.replace(d);
+		this.lastScan = found;
 		return found;
 	}
 
@@ -236,7 +240,9 @@ class DeviceStore {
 	async retryDevice(device: Device) {
 		this.retrying[device.id] = true;
 		try {
-			const found = await discoverDevices(device.host);
+			const report = await discoverDevices(device.host);
+			this.lastScan = report;
+			const found = report.devices;
 			if (!found.length) {
 				toasts.push(`${device.alias} still unreachable`, 'error');
 				return;
@@ -252,9 +258,10 @@ class DeviceStore {
 	}
 
 	/** Unicast-sweep a whole subnet; merges any found devices into the list. */
-	async scanSubnet(subnet?: string): Promise<Device[]> {
+	async scanSubnet(subnet?: string): Promise<ScanReport> {
 		const found = await scanSubnet(subnet);
-		for (const d of found) this.replace(d);
+		for (const d of found.devices) this.replace(d);
+		this.lastScan = found;
 		return found;
 	}
 

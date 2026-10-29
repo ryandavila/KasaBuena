@@ -347,7 +347,7 @@ def test_unreadable_target_is_not_served(tmp_path, fake_discover):
 
     found = asyncio.run(reg.discover_target("10.0.0.5"))
 
-    assert found == []  # not returned to the caller
+    assert found.devices == []  # not returned to the caller
     assert "10.0.0.5" not in reg._devices  # and never cached/served
 
 
@@ -380,7 +380,7 @@ def test_discover_subnet_finds_caches_and_skips_unreadable(tmp_path, fake_discov
 
     found = asyncio.run(reg.discover_subnet("10.0.0.0/30"))
 
-    assert {d.host for d in found} == {"10.0.0.1"}  # B skipped, A served
+    assert {d.host for d in found.devices} == {"10.0.0.1"}  # B skipped, A served
     assert set(reg._devices) == {"10.0.0.1"}
     assert store.load() == {"10.0.0.1"}  # only the readable host is persisted
 
@@ -644,3 +644,85 @@ def test_migration_never_crashes_discovery(tmp_path, fake_discover):
     asyncio.run(reg.discover_all())  # must not raise despite the failing stores
 
     assert reg.get("AABBCCDDEE01").host == "10.0.0.5"
+
+
+def test_scan_outcomes_and_logs(fake_discover, caplog):
+    from kasa.exceptions import AuthenticationError, UnsupportedDeviceError
+    from kasa.exceptions import TimeoutError as KasaTimeoutError
+
+    fake_discover.targets = {
+        "10.0.0.1": {"10.0.0.1": FakeDevice("10.0.0.1")},
+        "10.0.0.4": {"10.0.0.4": FakeDevice("10.0.0.4", fail_update=True)},
+    }
+    fake_discover.failures = {
+        "10.0.0.2": UnsupportedDeviceError(
+            "secret packet",
+            host="10.0.0.2",
+            discovery_result={
+                "device_model": "KP125",
+                "device_type": "SMART.KASAPLUG",
+                "mgt_encrypt_schm": {"encrypt_type": "TPAP"},
+            },
+        ),
+        "10.0.0.3": AuthenticationError("secret credentials"),
+        "10.0.0.5": RuntimeError("unexpected"),
+        "10.0.0.6": KasaTimeoutError("no response"),
+    }
+    reg = DeviceRegistry()
+    with caplog.at_level("INFO"):
+        report = asyncio.run(reg.discover_subnet("10.0.0.0/29"))
+    assert [d.host for d in report.devices] == ["10.0.0.1"]
+    assert [s.reason for s in report.skipped] == [
+        "unsupported",
+        "auth_failed",
+        "unreadable",
+        "error",
+    ]
+    assert report.skipped[0].model == "KP125"
+    assert report.skipped[0].encrypt_type == "TPAP"
+    assert report.stats.hosts_probed == 6
+    assert report.stats.responded == 4
+    assert report.stats.duration_seconds >= 0
+    assert reg.last_scan == report
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 2
+    assert len([r for r in caplog.records if r.levelname == "INFO"]) == 1
+    assert "probed=6 responded=4 found=1 unsupported=1" in caplog.text
+    assert "secret" not in caplog.text + report.model_dump_json()
+
+
+def test_broadcast_unsupported_and_refresh_auth(fake_discover, caplog):
+    from kasa.exceptions import AuthenticationError, UnsupportedDeviceError
+
+    fake_discover.failures["10.0.0.2"] = UnsupportedDeviceError(
+        "unsupported", host="10.0.0.2"
+    )
+    fake_discover.broadcast["10.0.0.1"] = FakeDevice(
+        "10.0.0.1", fail_update=AuthenticationError("bad login")
+    )
+    report = asyncio.run(DeviceRegistry().discover_all())
+    assert report.stats.hosts_probed is None
+    assert report.stats.responded == 2
+    assert {s.reason for s in report.skipped} == {"unsupported", "auth_failed"}
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 2
+
+
+def test_target_unsupported_exception_and_timeout(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from kasa.exceptions import UnsupportedDeviceError
+
+    reg = DeviceRegistry()
+    monkeypatch.setattr(
+        kasa_service.Discover,
+        "discover_single",
+        AsyncMock(side_effect=UnsupportedDeviceError("unsupported")),
+    )
+    report = asyncio.run(reg.discover_target("10.0.0.1"))
+    assert report.skipped[0].reason == "unsupported"
+    assert report.stats.responded == 1
+    monkeypatch.setattr(
+        kasa_service.Discover, "discover_single", AsyncMock(side_effect=TimeoutError)
+    )
+    report = asyncio.run(reg.discover_target("10.0.0.1"))
+    assert report.skipped == []
+    assert report.stats.responded == 0

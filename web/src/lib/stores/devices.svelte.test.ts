@@ -227,7 +227,7 @@ describe('retryDevice', () => {
 		});
 		deviceStore.devices = [placeholder];
 		const live = makeDevice({ id: 'AABBCC', host: '10.0.0.5', alias: 'Lamp', reachable: true });
-		discoverDevices.mockResolvedValue([live]);
+		discoverDevices.mockResolvedValue({ devices: [live], skipped: [], stats: {} });
 
 		await deviceStore.retryDevice(placeholder);
 
@@ -240,7 +240,7 @@ describe('retryDevice', () => {
 	it('keeps the card and toasts when the device is still unreachable', async () => {
 		const placeholder = makeDevice({ id: '10.0.0.5', host: '10.0.0.5', reachable: false });
 		deviceStore.devices = [placeholder];
-		discoverDevices.mockResolvedValue([]); // nothing answered
+		discoverDevices.mockResolvedValue({ devices: [], skipped: [], stats: {} }); // nothing answered
 
 		await deviceStore.retryDevice(placeholder);
 
@@ -339,4 +339,36 @@ describe('merge with sparse SSE frames', () => {
 		deviceStore.merge([strip()]);
 		expect(deviceStore.devices[0].children.map((c) => c.id)).toEqual(['STRIP_00']);
 	});
+});
+
+describe('scan reports', () => {
+	it.each(['subnet', 'target'] as const)(
+		'retains skipped hosts and merges only devices for %s',
+		async (mode) => {
+			const live = makeDevice({ id: 'FOUND' });
+			const report = {
+				devices: [live],
+				skipped: [
+					{
+						host: '10.0.0.9',
+						reason: 'unsupported',
+						detail: 'Unsupported protocol',
+						model: 'KP125',
+						device_type: 'SMART.KASAPLUG',
+						encrypt_type: 'TPAP'
+					}
+				],
+				stats: { hosts_probed: 6, responded: 2, duration_seconds: 0.1 }
+			};
+			deviceStore.devices = [];
+			(mode === 'subnet' ? (client.scanSubnet as Mock) : discoverDevices).mockResolvedValue(report);
+			const result =
+				mode === 'subnet'
+					? await deviceStore.scanSubnet('10.0.0.0/29')
+					: await deviceStore.discoverTarget('10.0.0.9');
+			expect(result).toEqual(report);
+			expect(deviceStore.lastScan).toEqual(report);
+			expect(deviceStore.devices.map((d) => d.id)).toEqual(['FOUND']);
+		}
+	);
 });

@@ -20,6 +20,7 @@ from ..schemas import (
     PowerRequest,
     PowerResult,
     RenameRequest,
+    ScanReport,
     ServerConfig,
     ServerStatus,
     SubnetScanRequest,
@@ -71,24 +72,26 @@ async def state() -> list[Device]:
     return live + registry.unreachable_devices()
 
 
-@router.post("/discover", response_model=list[Device])
-async def discover(req: DiscoverRequest) -> list[Device]:
+@router.post("/discover", response_model=ScanReport)
+async def discover(req: DiscoverRequest) -> ScanReport:
     if req.target:
         devices = await registry.discover_target(req.target)
         # A host that just answered flips to reachable; push the fresh frame so
         # grayed cards update now (the retry affordance relies on this).
         await broadcaster.publish_now()
-        return [serialize_device(d) for d in devices]
+        return devices
     # Broadcast re-discovery: also refresh cloud-only devices (e.g. a strip
     # onboarded after startup) so they appear without a restart. attach_cloud() is
     # a no-op when the fallback is disabled.
-    await registry.discover_all()
+    report = await registry.discover_all()
     await registry.attach_cloud()
-    return [serialize_device(d) for d in registry.all()]
+    return report.model_copy(
+        update={"devices": [serialize_device(d) for d in registry.all()]}
+    )
 
 
-@router.post("/discover/subnet", response_model=list[Device])
-async def discover_subnet(req: SubnetScanRequest) -> list[Device]:
+@router.post("/discover/subnet", response_model=ScanReport)
+async def discover_subnet(req: SubnetScanRequest) -> ScanReport:
     subnet = req.subnet or registry.scan_subnet
     if not subnet:
         raise HTTPException(
@@ -99,7 +102,7 @@ async def discover_subnet(req: SubnetScanRequest) -> list[Device]:
         devices = await registry.discover_subnet(subnet)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from None
-    return [serialize_device(d) for d in devices]
+    return devices
 
 
 @router.post("/devices/{device_id}/power", response_model=Device)

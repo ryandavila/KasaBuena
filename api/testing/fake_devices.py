@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from kasa import Module
+from kasa.exceptions import UnsupportedDeviceError
 
 if TYPE_CHECKING:
     from ..kasa_service import DeviceRegistry
@@ -140,6 +141,8 @@ class FakeDevice:
         self.alias = alias
 
     async def update(self) -> None:
+        if isinstance(self._fail_update, Exception):
+            raise self._fail_update
         if self._fail_update:
             raise RuntimeError("simulated update failure (auth/offline)")
         self.update_count += 1
@@ -157,20 +160,32 @@ class FakeDiscover:
     """Drop-in for ``kasa.Discover``; serves canned results by target."""
 
     def __init__(self):
+        self.failures: dict[str, Exception] = {}
         self.broadcast: dict[str, FakeDevice] = {}
         self.targets: dict[str, dict[str, FakeDevice]] = {}
         self.credentials = None  # last value passed in
 
     async def discover(
-        self, target: str | None = None, credentials=None
+        self, target: str | None = None, credentials=None, on_unsupported=None
     ) -> dict[str, FakeDevice]:
         self.credentials = credentials
         if target is None:
+            for error in self.failures.values():
+                if isinstance(error, UnsupportedDeviceError) and on_unsupported:
+                    await on_unsupported(error)
             return dict(self.broadcast)
         return dict(self.targets.get(target, {}))
 
     async def discover_single(self, host, *, credentials=None, **kwargs) -> FakeDevice:
         self.credentials = credentials
+        if host in self.failures:
+            error = self.failures[host]
+            if isinstance(error, UnsupportedDeviceError) and kwargs.get(
+                "on_unsupported"
+            ):
+                await kwargs["on_unsupported"](error)
+                return None
+            raise error
         entry = self.targets.get(host)
         if not entry:
             raise TimeoutError(host)  # no device at this address

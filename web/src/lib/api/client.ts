@@ -3,6 +3,7 @@ import type {
 	AlertThresholds,
 	BackupDocument,
 	Device,
+	ScanReport,
 	EnergyHistory,
 	EnergyInsights,
 	EnergySummary,
@@ -92,7 +93,7 @@ export const listDevices = () => request<Device[]>('/devices');
 export const getState = () => request<Device[]>('/state');
 
 /** Trigger a fresh network discovery; pass a target IP to probe a single host. */
-export const discoverDevices = (target?: string) => post<Device[]>('/discover', { target });
+export const discoverDevices = (target?: string) => post<ScanReport>('/discover', { target });
 
 /** Server config the UI needs, e.g. the default subnet to offer for sweeping. */
 export const getConfig = () => request<ServerConfig>('/config');
@@ -101,7 +102,7 @@ export const getConfig = () => request<ServerConfig>('/config');
 export const getStatus = () => request<ServerStatus>('/status');
 
 /** Unicast-sweep a whole subnet; falls back to the server's configured subnet. */
-export const scanSubnet = (subnet?: string) => post<Device[]>('/discover/subnet', { subnet });
+export const scanSubnet = (subnet?: string) => post<ScanReport>('/discover/subnet', { subnet });
 
 export const setPower = (id: string, on: boolean) =>
 	post<Device>(`/devices/${encodeURIComponent(id)}/power`, { on });

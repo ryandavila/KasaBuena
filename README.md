@@ -306,3 +306,21 @@ application. Built on
 [python-kasa](https://github.com/python-kasa/python-kasa),
 [FastAPI](https://fastapi.tiangolo.com/),
 [SvelteKit](https://svelte.dev/), and [Tailwind CSS](https://tailwindcss.com/).
+
+### Discovery reports
+
+`POST /api/discover` (broadcast or a `target`) and `POST /api/discover/subnet`
+return `{ devices, skipped, stats }`. Other device-list endpoints retain their
+array responses. Skipped entries contain `host`, `reason`, `detail`, and optional
+`model`, `device_type`, and `encrypt_type`. Reasons are `unsupported`,
+`auth_failed`, `unreadable` (discovered but state could not be read), or `error`.
+Successful probes populate `devices`; ordinary discovery timeouts are omitted.
+
+Stats include `hosts_probed` (null for broadcast), `responded` (unique hosts with
+confirmed discovery/read responses, excluding unexpected probe errors), and
+`duration_seconds`. Broadcast responses continue to include cached cloud devices;
+scan stats describe local discovery only. The latest scan report is held in
+server and browser memory, replaced by the next scan, and is not persisted or
+added to `/api/status`. The Scan tab retains its report when switching tabs.
+TPAP entries link to the bundled [protocol note](web/static/discovery-help.html).
+Log naming, diagnostics, metrics, tracing, and cloud controls are unchanged.

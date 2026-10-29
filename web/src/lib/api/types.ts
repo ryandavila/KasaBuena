@@ -399,3 +399,17 @@ export interface VacationStatus extends VacationConfig {
 	/** device_ids unioned with the current members of room_ids. */
 	resolved_device_ids: string[];
 }
+
+export interface SkippedHost {
+	host: string;
+	reason: 'unsupported' | 'auth_failed' | 'unreadable' | 'error';
+	detail: string;
+	model: string | null;
+	device_type: string | null;
+	encrypt_type: string | null;
+}
+export interface ScanReport {
+	devices: Device[];
+	skipped: SkippedHost[];
+	stats: { hosts_probed: number | null; responded: number; duration_seconds: number };
+}

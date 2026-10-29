@@ -8,7 +8,7 @@ from typing import Any, NamedTuple
 
 from kasa import Credentials, Discover, Module
 from kasa import Device as KasaDevice
-from kasa.exceptions import AuthenticationError
+from kasa.exceptions import AuthenticationError, UnsupportedDeviceError
 
 from .cloud_service import (
     KasaCloudClient,
@@ -21,7 +21,17 @@ from .device_store import DeviceSnapshotStore, HostStore
 from .energy_history import EnergyHistoryStore, history
 from .group_store import GroupStore, groups
 from .logging_config import get_logger
-from .schemas import ChildPlug, Device, Hsv, PowerResult, Usage, UsageStat
+from .schemas import (
+    ChildPlug,
+    Device,
+    Hsv,
+    PowerResult,
+    ScanReport,
+    ScanStats,
+    SkippedHost,
+    Usage,
+    UsageStat,
+)
 
 logger = get_logger(__name__)
 
@@ -172,6 +182,7 @@ class DeviceRegistry:
         # offline hosts these respond, so they're cloud-control candidates and we
         # hint about them when the fallback is off.
         self._unreadable_hosts: set[str] = set()
+        self.last_scan = ScanReport()
         # True while the initial sweep runs; exposed via /api/status so the UI
         # shows "scanning…" instead of an empty list (the sweep runs in the
         # background so the API serves immediately).
@@ -315,58 +326,138 @@ class DeviceRegistry:
                 {host: snap.model_dump() for host, snap in self._snapshots.items()}
             )
 
-    async def _probe_host(self, host: str) -> None:
-        """Re-attach a single known host, tolerating failure (it may be offline)."""
-        try:
-            response = await Discover.discover(
-                target=host, credentials=self._credentials
-            )
-        except Exception as e:  # noqa: BLE001 - offline known host shouldn't break startup
-            logger.warning(f"Known host {host} did not respond: {e}")
-            return
-        for device in response.values():
-            if await self._refresh(device):
-                await self._store_device(device)
-                self._unreadable_hosts.discard(device.host)
-            else:
-                self._unreadable_hosts.add(device.host)
-                await self._safe_disconnect(device)
-                logger.warning(
-                    f"Known host {device.host} answered but could not be read "
-                    "(bad credentials or offline); not serving it"
-                )
+    @staticmethod
+    def _skip(host: str, error: Exception, *, reading: bool = False) -> SkippedHost:
+        metadata = getattr(error, "discovery_result", None) or {}
+        reason = (
+            "unsupported"
+            if isinstance(error, UnsupportedDeviceError)
+            else "auth_failed"
+            if isinstance(error, AuthenticationError)
+            else "unreadable"
+            if reading
+            else "error"
+        )
+        # Do not expose exception strings: they can contain credentials or full packets.
+        return SkippedHost(
+            host=host,
+            reason=reason,
+            detail={
+                "unsupported": "Device protocol is not supported by python-kasa.",
+                "auth_failed": "Local authentication failed. Check device credentials.",
+                "unreadable": "Device answered discovery but its state could not be read.",
+                "error": "Discovery failed unexpectedly.",
+            }[reason],
+            model=metadata.get("device_model"),
+            device_type=metadata.get("device_type"),
+            encrypt_type=(metadata.get("mgt_encrypt_schm") or {}).get("encrypt_type"),
+        )
 
-    async def discover_all(self) -> list[KasaDevice]:
-        """Broadcast-discover devices on the local network and cache them."""
-        logger.info("Starting device discovery")
-        discovered = await Discover.discover(credentials=self._credentials)
+    async def _accept_scan_device(self, device, found, skipped):
+        try:
+            await device.update()
+        except Exception as error:  # noqa: BLE001 - isolate each responding host
+            skipped[device.host] = self._skip(device.host, error, reading=True)
+            self._unreadable_hosts.add(device.host)
+            await self._safe_disconnect(device)
+        else:
+            await self._store_device(device)
+            self._miss_counts.pop(stable_device_id(device), None)
+            self._unreadable_hosts.discard(device.host)
+            skipped.pop(device.host, None)
+            found.append(device)
+
+    async def _scan_host(self, host, found, skipped, timeout=2):
+        async def unsupported(error):
+            skipped[host] = self._skip(host, error)
+
+        try:
+            device = await Discover.discover_single(
+                host,
+                credentials=self._credentials,
+                discovery_timeout=timeout,
+                on_unsupported=unsupported,
+            )
+        except TimeoutError:
+            return
+        except (UnsupportedDeviceError, AuthenticationError) as error:
+            skipped[host] = self._skip(host, error)
+            if isinstance(error, AuthenticationError):
+                self._unreadable_hosts.add(host)
+        except Exception as error:  # noqa: BLE001 - isolate unexpected probe failures
+            skipped[host] = self._skip(host, error)
+        else:
+            if device is not None:
+                await self._accept_scan_device(device, found, skipped)
+
+    def _finish_scan(self, found, skipped, probed, started) -> ScanReport:
+        report = ScanReport(
+            devices=[serialize_device(d) for d in found],
+            skipped=sorted(skipped.values(), key=lambda entry: entry.host),
+            stats=ScanStats(
+                hosts_probed=probed,
+                responded=len(
+                    {d.host for d in found}
+                    | {h for h, result in skipped.items() if result.reason != "error"}
+                ),
+                duration_seconds=time.monotonic() - started,
+            ),
+        )
+        counts = {
+            reason: sum(s.reason == reason for s in report.skipped)
+            for reason in ("unsupported", "auth_failed", "unreadable", "error")
+        }
+        for entry in report.skipped:
+            if entry.reason in ("unsupported", "auth_failed"):
+                logger.warning(
+                    "Discovery host=%s reason=%s model=%s device_type=%s encrypt_type=%s",
+                    entry.host,
+                    entry.reason,
+                    entry.model,
+                    entry.device_type,
+                    entry.encrypt_type,
+                )
+        logger.info(
+            "Scan probed=%s responded=%s found=%s unsupported=%s auth_failed=%s unreadable=%s error=%s duration=%.3fs",
+            probed,
+            report.stats.responded,
+            len(found),
+            counts["unsupported"],
+            counts["auth_failed"],
+            counts["unreadable"],
+            counts["error"],
+            report.stats.duration_seconds,
+        )
+        self.last_scan = report
+        self._persist()
+        return report
+
+    async def discover_all(self) -> ScanReport:
+        """Broadcast discovery plus known hosts; the broadcast population is unknown."""
+        started = time.monotonic()
+        skipped = {}
+        found = []
+
+        async def unsupported(error):
+            host = error.host or "unknown"
+            skipped[host] = self._skip(host, error)
+
+        discovered = await Discover.discover(
+            credentials=self._credentials, on_unsupported=unsupported
+        )
         self._unreadable_hosts = set()
-        # Re-scan rebuilds the cache with fresh objects; release the previous ones
-        # so their sessions don't leak as "Unclosed".
         previous = self._devices
         self._devices = {}
-        for d in discovered.values():
-            if await self._refresh(d):
-                await self._store_device(d)
-            else:
-                self._unreadable_hosts.add(d.host)
-                await self._safe_disconnect(d)
-
-        # Re-attach known hosts that broadcast discovery didn't reach.
+        for device in discovered.values():
+            await self._accept_scan_device(device, found, skipped)
         if self._store is not None:
-            for host in self._store.load() - self._hosts():
-                await self._probe_host(host)
-
-        # Disconnect prior-scan devices that weren't re-cached (by identity, never
-        # closing a device we kept).
+            for host in self._store.load() - self._hosts() - skipped.keys():
+                await self._scan_host(host, found, skipped)
         kept = set(map(id, self._devices.values()))
         for old in previous.values():
             if id(old) not in kept:
                 await self._safe_disconnect(old)
-
-        logger.info(f"Discovered {len(self._devices)} devices")
-        self._persist()
-        return list(self._devices.values())
+        return self._finish_scan(found, skipped, None, started)
 
     async def run_startup_discovery(self) -> None:
         """Run the full initial discovery, flagging ``discovering`` throughout.
@@ -389,66 +480,32 @@ class DeviceRegistry:
         finally:
             self.discovering = False
 
-    async def discover_target(self, target: str) -> list[KasaDevice]:
-        """Probe a single IP (or broadcast address) and merge results in."""
-        logger.info(f"Discovering target {target}")
-        response = await Discover.discover(target=target, credentials=self._credentials)
-        found: list[KasaDevice] = []
-        for device in response.values():
-            if await self._refresh(device):
-                await self._store_device(device)
-                self._unreadable_hosts.discard(device.host)
-                found.append(device)
-            else:
-                self._unreadable_hosts.add(device.host)
-                await self._safe_disconnect(device)
-                logger.warning(
-                    f"Device at {device.host} answered but could not be read "
-                    "(bad credentials or offline)"
-                )
-        self._persist()
-        return found
+    async def discover_target(self, target: str) -> ScanReport:
+        """Probe a single host and merge readable results."""
+        started = time.monotonic()
+        found, skipped = [], {}
+        await self._scan_host(target, found, skipped)
+        return self._finish_scan(found, skipped, 1, started)
 
     async def discover_subnet(
         self, subnet: str, *, concurrency: int = 50, timeout: int = 2
-    ) -> list[KasaDevice]:
-        """Unicast-probe every host in a CIDR subnet and cache the readable ones.
-
-        Broadcast discovery can't cross subnet/VLAN boundaries, so sweep each
-        address directly. Raises ``ValueError`` on an invalid CIDR.
-        """
+    ) -> ScanReport:
+        """Unicast-probe every host; ordinary discovery timeouts stay silent."""
         try:
             network = ipaddress.ip_network(subnet, strict=False)
         except ValueError as e:
             raise ValueError(f"Invalid subnet {subnet!r}: {e}") from e
-
+        started = time.monotonic()
         hosts = [str(h) for h in network.hosts()]
-        logger.info(f"Sweeping {subnet} ({len(hosts)} hosts)")
         semaphore = asyncio.Semaphore(concurrency)
-        found: list[KasaDevice] = []
+        found, skipped = [], {}
 
-        async def probe(host: str) -> None:
+        async def probe(host):
             async with semaphore:
-                try:
-                    device = await Discover.discover_single(
-                        host,
-                        credentials=self._credentials,
-                        discovery_timeout=timeout,
-                    )
-                except Exception:  # noqa: BLE001 - most addresses have no device
-                    return
-                if await self._refresh(device):
-                    await self._store_device(device)
-                    self._unreadable_hosts.discard(device.host)
-                    found.append(device)
-                else:
-                    self._unreadable_hosts.add(device.host)
-                    await self._safe_disconnect(device)
+                await self._scan_host(host, found, skipped, timeout)
 
         await asyncio.gather(*(probe(h) for h in hosts))
-        logger.info(f"Subnet sweep of {subnet} found {len(found)} devices")
-        self._persist()
-        return found
+        return self._finish_scan(found, skipped, len(hosts), started)
 
     async def refresh_all(self) -> list[KasaDevice]:
         """Re-read live state from cached devices (no network discovery).

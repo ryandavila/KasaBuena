@@ -6,10 +6,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.group_store import GroupStore
-from api.kasa_service import DeviceRegistry
+from api.kasa_service import DeviceRegistry, serialize_device
 from api.routers import devices as devices_routes
 from api.routers import energy as energy_routes
 from api.routers import groups as groups_routes
+from api.schemas import ScanReport
 
 # The former monolithic ``routes`` module split into per-domain routers; these
 # tests span devices, energy (usage/summary), and group power. The shared
@@ -133,14 +134,21 @@ def test_discover_broadcast_also_refreshes_cloud_devices(monkeypatch):
     reg._cloud_devices = {
         "10.0.0.9": FakeDevice("10.0.0.9", alias="Strip", type_name="Strip")
     }
-    reg.discover_all = AsyncMock(return_value=list(reg._devices.values()))
+    reg.discover_all = AsyncMock(
+        return_value=ScanReport(
+            devices=[serialize_device(d) for d in reg._devices.values()]
+        )
+    )
     reg.attach_cloud = AsyncMock(return_value=list(reg._cloud_devices.values()))
 
     body = _routes_app(reg, monkeypatch).post("/api/discover", json={}).json()
 
     reg.discover_all.assert_awaited_once()
     reg.attach_cloud.assert_awaited_once()
-    assert {d["id"] for d in body} == {"10.0.0.1", "10.0.0.9"}  # local + cloud
+    assert {d["id"] for d in body["devices"]} == {
+        "10.0.0.1",
+        "10.0.0.9",
+    }  # local + cloud
 
 
 def test_discover_target_does_not_attach_cloud(monkeypatch):
@@ -148,7 +156,9 @@ def test_discover_target_does_not_attach_cloud(monkeypatch):
     # re-attach and no broadcast.
     reg = DeviceRegistry()
     reg.discover_target = AsyncMock(
-        return_value=[FakeDevice("10.0.0.5", alias="Found")]
+        return_value=ScanReport(
+            devices=[serialize_device(FakeDevice("10.0.0.5", alias="Found"))]
+        )
     )
     reg.discover_all = AsyncMock()
     reg.attach_cloud = AsyncMock()
@@ -162,7 +172,7 @@ def test_discover_target_does_not_attach_cloud(monkeypatch):
     reg.discover_target.assert_awaited_once_with("10.0.0.5")
     reg.discover_all.assert_not_awaited()
     reg.attach_cloud.assert_not_awaited()
-    assert {d["id"] for d in body} == {"10.0.0.5"}
+    assert {d["id"] for d in body["devices"]} == {"10.0.0.5"}
 
 
 def test_toggle_power(client):
@@ -516,3 +526,39 @@ def test_all_power_nudges_broadcaster(client, monkeypatch):
     monkeypatch.setattr(broadcaster, "publish_now", nudge)
     assert client.post("/api/power", json={"on": False}).status_code == 200
     nudge.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/discover", {}),
+        ("/api/discover", {"target": "10.0.0.1"}),
+        ("/api/discover/subnet", {"subnet": "10.0.0.0/30"}),
+    ],
+)
+def test_discovery_routes_return_skipped_hosts(monkeypatch, path, payload):
+    from kasa.exceptions import UnsupportedDeviceError
+
+    from api import kasa_service
+    from api.testing.fake_devices import FakeDiscover
+
+    fake = FakeDiscover()
+    fake.failures["10.0.0.1"] = UnsupportedDeviceError(
+        "unsupported",
+        host="10.0.0.1",
+        discovery_result={
+            "device_model": "KP125",
+            "mgt_encrypt_schm": {"encrypt_type": "TPAP"},
+        },
+    )
+    monkeypatch.setattr(kasa_service, "Discover", fake)
+    reg = DeviceRegistry()
+    reg.attach_cloud = AsyncMock()
+    response = _routes_app(reg, monkeypatch).post(path, json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"devices", "skipped", "stats"}
+    assert body["devices"] == []
+    assert body["skipped"][0]["reason"] == "unsupported"
+    assert body["skipped"][0]["encrypt_type"] == "TPAP"
+    assert body["stats"]["responded"] == 1

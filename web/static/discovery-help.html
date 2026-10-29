@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Discovery help — KasaBuena</title>
+	</head>
+	<body>
+		<main>
+			<h1 id="tpap">TPAP devices</h1>
+			<p>
+				These devices answered discovery, but their firmware uses TPAP encryption, which the
+				installed python-kasa cannot control locally. This is a firmware/protocol limitation, not a
+				missing device or a scan timeout. python-kasa 0.11.0.1 and 0.12.0 exhibit the same
+				limitation.
+			</p>
+			<p>
+				Changing credentials or repeating the scan will not add TPAP support. KasaBuena shows these
+				hosts for visibility; they are not controllable device cards.
+			</p>
+		</main>
+	</body>
+</html>

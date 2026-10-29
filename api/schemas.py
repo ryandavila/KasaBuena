@@ -47,6 +47,29 @@ class Device(BaseModel):
     )
 
 
+class SkippedHost(BaseModel):
+    host: str
+    reason: Literal["unsupported", "auth_failed", "unreadable", "error"]
+    detail: str
+    model: str | None = None
+    device_type: str | None = None
+    encrypt_type: str | None = None
+
+
+class ScanStats(BaseModel):
+    hosts_probed: int | None = Field(
+        default=None, description="Unknown for broadcast scans."
+    )
+    responded: int = 0
+    duration_seconds: float = 0
+
+
+class ScanReport(BaseModel):
+    devices: list[Device] = Field(default_factory=list)
+    skipped: list[SkippedHost] = Field(default_factory=list)
+    stats: ScanStats = Field(default_factory=ScanStats)
+
+
 class UsageStat(BaseModel):
     """A single bar in an energy chart (a day or a month)."""
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { Device } from '$lib/api/types';
+	import { asset } from '$app/paths';
+	import type { ScanReport } from '$lib/api/types';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { deviceStore } from '$lib/stores/devices.svelte';
 	import { toasts } from '$lib/stores/toasts.svelte';
@@ -12,8 +13,13 @@
 	let target = $state('');
 	let scanning = $state(false);
 	let probing = $state(false);
-	let found = $state<Device[]>([]);
-	let searched = $state(false);
+	const found = $derived(deviceStore.lastScan?.devices ?? []);
+	const skipped = $derived(deviceStore.lastScan?.skipped ?? []);
+	const unsupported = $derived(skipped.filter((s) => s.reason === 'unsupported').length);
+	const searched = $derived(deviceStore.lastScan !== null);
+	const summary = $derived(
+		`${found.length} found, ${unsupported} detected but unsupported${skipped.length > unsupported ? `, ${skipped.length - unsupported} other failures` : ''}`
+	);
 
 	onMount(async () => {
 		// Config is best-effort; the field just starts empty when it can't load.
@@ -21,21 +27,14 @@
 		if (!subnet && configStore.scanSubnet) subnet = configStore.scanSubnet;
 	});
 
-	function report(devices: Device[]) {
-		found = devices;
-		searched = true;
-		toasts.push(
-			devices.length
-				? `Found ${devices.length} device${devices.length > 1 ? 's' : ''}`
-				: 'No devices found',
-			devices.length ? 'info' : 'off'
-		);
+	function report(result: ScanReport) {
+		deviceStore.lastScan = result;
+		toasts.push(summary, 'info');
 	}
 
 	function fail(e: unknown, fallback: string) {
 		toasts.push(errorMessage(e, fallback), 'error');
-		found = [];
-		searched = true;
+		deviceStore.lastScan = null;
 	}
 
 	async function scan() {
@@ -157,13 +156,48 @@
 
 	{#if searched && !busy}
 		<div class="mt-6">
+			<p class="mb-4 text-sm text-muted" role="status">{summary}</p>
+			{#if skipped.length}
+				<details class="mb-6 rounded-xl border border-line p-4">
+					<summary class="cursor-pointer text-sm text-ink"
+						>Detected hosts and failures ({skipped.length})</summary
+					>
+					<div class="overflow-x-auto">
+						<table class="mt-3 w-full text-left text-sm text-muted">
+							<thead><tr><th>Host</th><th>Model</th><th>Reason</th></tr></thead>
+							<tbody>
+								{#each skipped as host (host.host)}
+									<tr
+										><td class="p-2 font-mono">{host.host}</td><td class="p-2"
+											>{host.model ?? 'Unknown'}</td
+										><td class="p-2">
+											{host.reason.replaceAll('_', ' ')} — {host.detail}
+											{#if host.encrypt_type === 'TPAP'}
+												<!-- Static help asset, not a SvelteKit route. -->
+												<!-- eslint-disable svelte/no-navigation-without-resolve -->
+												<a
+													class="text-accent-ink underline"
+													href={`${asset('/discovery-help.html')}#tpap`}
+													target="_blank"
+													rel="noreferrer">About TPAP</a
+												>
+												<!-- eslint-enable svelte/no-navigation-without-resolve -->
+											{/if}
+										</td></tr
+									>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</details>
+			{/if}
 			{#if found.length}
 				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					{#each found as device, i (device.id)}
 						<DeviceCard {device} delay={i * 50} />
 					{/each}
 				</div>
-			{:else}
+			{:else if !skipped.length}
 				<p class="py-8 text-center text-sm text-muted">No devices answered.</p>
 			{/if}
 		</div>

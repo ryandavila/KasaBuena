@@ -64,6 +64,7 @@ export interface ServerStatus {
 
 /** Server-side configuration the UI needs (e.g. the default subnet to sweep). */
 export interface ServerConfig {
+	client_errors_enabled?: boolean;
 	/** CIDR the server sweeps by unicast, or null if unconfigured. */
 	scan_subnet: string | null;
 	/** Global flat $/kWh rate in currency units, or null when unset. */

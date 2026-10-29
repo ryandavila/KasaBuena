@@ -37,6 +37,7 @@ async def health() -> dict[str, str]:
 @router.get("/config", response_model=ServerConfig)
 async def config() -> ServerConfig:
     return ServerConfig(
+        client_errors_enabled=get_settings().kasa_client_errors,
         scan_subnet=registry.scan_subnet,
         energy_rate=registry.energy_rate,
         energy_currency=registry.energy_currency,

@@ -61,6 +61,21 @@ def test_health_failure_recovery_and_latest_scan(monkeypatch):
     assert recovered["last_error_at"] == health["last_error_at"]
 
 
+def test_client_errors_opt_in_and_limits(monkeypatch, caplog):
+    from api.config import Settings
+
+    settings = Settings(_env_file=None)
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    client = client_for(DeviceRegistry(), monkeypatch)
+    payload = {"kind": "error", "message": "Something broke\nsecond line"}
+    assert client.post("/api/client-errors", json=payload).status_code == 404
+    settings.kasa_client_errors = True
+    assert client.post("/api/client-errors", json=payload).status_code == 204
+    assert "Something broke\\nsecond line" in caplog.text
+    payload["message"] = "x" * 1001
+    assert client.post("/api/client-errors", json=payload).status_code == 422
+
+
 def test_diagnostics_exposes_history_and_schedule_warnings(monkeypatch):
     from api.config import Settings
     from api.run_history import RunHistory

@@ -1,16 +1,16 @@
-"""Read-only, in-memory diagnostics."""
+"""In-memory diagnostics and opt-in client error reporting."""
 
 from importlib.metadata import PackageNotFoundError, version
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..config import get_settings
 from ..kasa_service import registry
-from ..logging_config import request_id
+from ..logging_config import get_logger, request_id
 from ..run_history import run_history
 from ..schedule_store import schedules
-from ..schemas import Diagnostics
+from ..schemas import ClientErrorReport, Diagnostics
 
 router = APIRouter(prefix="/api")
 
@@ -92,4 +92,15 @@ async def diagnostics(request: Request) -> Diagnostics:
         background_tasks=states,
         recent_runs=run_history.all(),
         warnings=warnings,
+    )
+
+
+@router.post("/client-errors", status_code=204)
+async def client_errors(report: ClientErrorReport):
+    if not get_settings().kasa_client_errors:
+        raise HTTPException(404, "Client error reporting is disabled.")
+    # No stack, URL, request body or browser state is collected.
+    message = report.message.replace("\n", "\\n").replace("\r", "\\r")
+    get_logger(__name__).warning(
+        "Client %s: %s original_request_id=%s", report.kind, message, report.request_id
     )

@@ -186,3 +186,37 @@ describe('endpoint shapes', () => {
 		expect(init).toMatchObject({ method: 'POST', body: JSON.stringify(doc) });
 	});
 });
+
+describe('error correlation', () => {
+	it('preserves validation details and body request IDs in user messages', async () => {
+		const { errorMessage } = await import('./client');
+		mockFetch(() => ({
+			ok: false,
+			status: 422,
+			statusText: 'Invalid',
+			headers: new Headers(),
+			json: async () => ({ detail: [{ msg: 'Subnet is required' }], request_id: 'req-123' })
+		}));
+		try {
+			await listDevices();
+			throw new Error('expected rejection');
+		} catch (error) {
+			expect(errorMessage(error)).toBe('Subnet is required (request req-123)');
+		}
+	});
+	it('uses the response header when an error body is not JSON', async () => {
+		mockFetch(() => ({
+			ok: false,
+			status: 500,
+			statusText: 'Server error',
+			headers: new Headers({ 'X-Request-ID': 'req-456' }),
+			json: async () => {
+				throw new Error('invalid');
+			}
+		}));
+		await expect(listDevices()).rejects.toMatchObject({
+			requestId: 'req-456',
+			message: 'Server error'
+		});
+	});
+});

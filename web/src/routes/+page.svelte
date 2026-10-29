@@ -217,7 +217,18 @@
 				</span>
 				<p class="mt-4 font-display text-lg text-ink">No devices yet</p>
 				<p class="mx-auto mt-1 max-w-xs text-sm text-muted">
-					Make sure your Kasa devices are powered on and on this network, then scan.
+					{#if deviceStore.lastScan?.skipped.length}
+						Scan finished: {deviceStore.lastScan.skipped.filter(
+							(host) => host.reason === 'unsupported'
+						).length} unsupported,
+						{deviceStore.lastScan.skipped.filter((host) => host.reason !== 'unsupported').length} other
+						failures. Open Scan for details.
+					{:else if deviceStore.lastScan}
+						The last scan found no readable devices. Check power and network settings, then scan
+						again.
+					{:else}
+						Make sure your Kasa devices are powered on and on this network, then scan.
+					{/if}
 				</p>
 				<button
 					type="button"

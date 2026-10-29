@@ -364,3 +364,14 @@ and alert webhook deliveries with HTTP status, duration, and outcome. Failed
 background cycles also appear. Diagnostics highlights failed/missed schedules and
 sunrise/sunset schedules that lack a location. This history and device health
 reset on restart; existing saved schedules still retain their `last_fired` entry.
+
+API error toasts show the server detail and request ID. Set `KASA_CLIENT_ERRORS=1`
+to additionally log uncaught browser errors and failed requests through
+`POST /api/client-errors`; it returns 404 when disabled (the default). Reports
+include a bounded message and kind, not stacks, URLs, or request bodies. The
+browser caps reporting at 20 events per minute and silently drops delivery
+failures. Uncaught error messages may contain application-specific text.
+
+The observability rollout implements plan phases 0, 1, 2, 4 and 5. Prometheus
+metrics (phase 3) and OpenTelemetry tracing (phase 6) remain deferred: ordinary
+operation and diagnostics require no external monitoring services.

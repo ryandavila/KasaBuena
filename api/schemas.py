@@ -184,9 +184,18 @@ class SubnetScanRequest(BaseModel):
     )
 
 
+class ClientErrorReport(BaseModel):
+    kind: Literal["error", "rejection", "request", "network"]
+    message: str = Field(min_length=1, max_length=1000)
+    request_id: str | None = Field(
+        default=None, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+
+
 class ServerConfig(BaseModel):
     """Server-side configuration the frontend needs to render correctly."""
 
+    client_errors_enabled: bool = False
     scan_subnet: str | None = Field(
         default=None,
         description="Default CIDR the server sweeps, or null if unconfigured.",

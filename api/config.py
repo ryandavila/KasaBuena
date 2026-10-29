@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     # that broadcast discovery can't reach. None disables the sweep.
     kasa_scan_subnet: str | None = None
 
+    kasa_client_errors: bool = False
     kasa_log_format: Literal["text", "json"] = "text"
     kasa_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 

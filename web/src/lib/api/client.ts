@@ -31,11 +31,13 @@ import type {
  */
 
 const BASE = '/api';
+import { reportClientError } from '$lib/client-errors';
 
 export class ApiError extends Error {
 	constructor(
 		public status: number,
-		message: string
+		message: string,
+		public requestId: string | null = null
 	) {
 		super(message);
 		this.name = 'ApiError';
@@ -48,7 +50,8 @@ export class ApiError extends Error {
  * toast handling so the wording can't drift per feature.
  */
 export function errorMessage(e: unknown, fallback = 'Something went wrong'): string {
-	if (e instanceof ApiError) return e.message;
+	if (e instanceof ApiError)
+		return e.requestId ? `${e.message} (request ${e.requestId})` : e.message;
 	return e instanceof Error ? e.message : fallback;
 }
 
@@ -56,16 +59,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(`${BASE}${path}`, {
 		headers: { 'Content-Type': 'application/json' },
 		...init
+	}).catch((error) => {
+		reportClientError('network', 'API request failed before receiving a response.');
+		throw error;
 	});
 	if (!res.ok) {
-		let detail = res.statusText;
+		let detail = res.statusText || 'Request failed';
+		let requestId = res.headers?.get('X-Request-ID') ?? null;
 		try {
 			const body = await res.json();
-			detail = body.detail ?? detail;
+			if (typeof body.detail === 'string') detail = body.detail;
+			else if (Array.isArray(body.detail))
+				detail = body.detail
+					.map((item: { msg?: string }) => item.msg ?? 'Invalid input')
+					.join('; ');
+			if (!requestId && typeof body.request_id === 'string') requestId = body.request_id;
 		} catch {
 			// non-JSON error body; fall back to status text
 		}
-		throw new ApiError(res.status, detail);
+		reportClientError('request', `API request returned HTTP ${res.status}.`, requestId);
+		throw new ApiError(res.status, detail, requestId);
 	}
 	if (res.status === 204) return undefined as T;
 	return res.json() as Promise<T>;
@@ -235,13 +248,15 @@ export const restoreBackup = (doc: BackupDocument) => post<BackupDocument>('/bac
 async function downloadFile(path: string, filename: string): Promise<void> {
 	const res = await fetch(`${BASE}${path}`);
 	if (!res.ok) {
-		let detail = res.statusText;
+		let detail = res.statusText || 'Request failed';
+		const requestId = res.headers?.get('X-Request-ID') ?? null;
 		try {
 			detail = ((await res.json()).detail as string) ?? detail;
 		} catch {
 			// non-JSON error body; fall back to status text
 		}
-		throw new ApiError(res.status, detail);
+		reportClientError('request', `API request returned HTTP ${res.status}.`, requestId);
+		throw new ApiError(res.status, detail, requestId);
 	}
 	const blob = await res.blob();
 	const url = URL.createObjectURL(blob);

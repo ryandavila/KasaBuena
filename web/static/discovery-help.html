@@ -9,14 +9,42 @@
 		<main>
 			<h1 id="tpap">TPAP devices</h1>
 			<p>
-				These devices answered discovery, but their firmware uses TPAP encryption, which the
-				installed python-kasa cannot control locally. This is a firmware/protocol limitation, not a
-				missing device or a scan timeout. python-kasa 0.11.0.1 and 0.12.0 exhibit the same
-				limitation.
+				These devices answered discovery, but currently advertise TPAP encryption, which python-kasa
+				0.11.0.1 and 0.12.0 do not support. Some firmware can switch to a supported local protocol
+				when Third-Party Compatibility is enabled.
+			</p>
+			<h2>KP125M Matter plugs: check both requirements</h2>
+			<ol>
+				<li>
+					Enable <strong>Third-Party Compatibility</strong> in the Kasa app under
+					<strong>Me → Settings</strong>, or in the Tapo app under
+					<strong>Me → Third-Party Services</strong>.
+				</li>
+				<li>
+					Set <code>TPLINK_USERNAME</code> and <code>TPLINK_PASSWORD</code> to your TP-Link account
+					credentials in KasaBuena's repository-root <code>.env</code>. If the file is missing,
+					create it from <code>.env.example</code> first; cloning the repository does not include
+					your private <code>.env</code>.
+				</li>
+				<li>
+					Recreate the container with
+					<code>docker compose up -d --force-recreate kasabuena</code> to load changed credentials,
+					or restart the API for a local run. Then rescan.
+				</li>
+			</ol>
+			<p>
+				If the result changes from <code>unsupported</code> to <code>auth_failed</code>, the
+				protocol blocker has cleared but authentication still needs attention. Check that
+				credentials are loaded and accepted. A working power strip does not mean the individual
+				plugs have the same requirements. KasaBuena uses local Kasa control, not Matter pairing.
 			</p>
 			<p>
-				Changing credentials or repeating the scan will not add TPAP support. KasaBuena shows these
-				hosts for visibility; they are not controllable device cards.
+				Compatibility depends on firmware and model. See
+				<a href="https://www.tapo.com/uk/faq/714/?app=iframe"
+					>TP-Link's Third-Party Compatibility guidance</a
+				>
+				for the setting's purpose and tradeoffs. Changing credentials alone does not add TPAP
+				support.
 			</p>
 		</main>
 	</body>

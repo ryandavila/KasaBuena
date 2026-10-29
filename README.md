@@ -57,6 +57,11 @@ docker compose up -d
 # open http://localhost:8080
 ```
 
+> **Newer plugs (including KP125M Matter plugs):** some firmware requires both
+> TP-Link account credentials and **Third-Party Compatibility** enabled in the
+> Kasa/Tapo app. See [setup and troubleshooting](#newer-plugs-and-third-party-compatibility)
+> if power strips work but individual plugs do not.
+
 > **Discovery & networking:** Docker's default bridge network can't carry the
 > UDP broadcast discovery uses, so add devices by IP in the **Discovery** tab —
 > or, on a Linux host, switch to host networking (see the commented
@@ -152,6 +157,44 @@ compatible. The log path stays `logs/kasa_nice.log` as well.
 Put credentials in a `.env` at the repo root (copy `.env.example`); the server
 loads it on every start, with real environment variables taking precedence.
 Without credentials, only legacy plugs are reachable. `.env` is gitignored.
+
+### Newer plugs and Third-Party Compatibility
+
+**For KP125M Matter plugs on affected firmware, configure both the app setting
+and your TP-Link account credentials.** A working HS300 power strip does not
+prove the individual plugs are configured correctly; firmware and authentication
+requirements can differ. KasaBuena uses python-kasa's local protocol, not Matter
+pairing, even when the plug also supports Matter.
+
+1. Enable **Third-Party Compatibility** in the phone app:
+   - **Kasa:** Me → Settings → Third-Party Compatibility.
+   - **Tapo:** Me → Third-Party Services → Third-Party Compatibility.
+   This permits third-party local access. Availability depends on the device and
+   firmware; see [TP-Link's explanation](https://www.tapo.com/uk/faq/714/?app=iframe).
+2. Create `.env` in the repository root **if it does not already exist**, using
+   `.env.example` as the template. Set `TPLINK_USERNAME` to your TP-Link account
+   email and `TPLINK_PASSWORD` to its password. Keep existing values when editing
+   an existing file. `.env` is Git-ignored and is not included when cloning the
+   repository. Docker Compose treats it as optional, so the app can start without
+   credentials if the file is missing.
+3. After saving `.env`, recreate the Docker container to load the new environment:
+   `docker compose up -d --force-recreate kasabuena`. A plain `docker compose restart`
+   does not reload environment variables. For a local run, restart the API process.
+4. Refresh the browser and rescan your subnet in **Discovery**.
+
+The scan result distinguishes the two blockers:
+
+| Result | What to check |
+| --- | --- |
+| `unsupported` with `TPAP` | The device advertises an encryption protocol this python-kasa version cannot use. Check the app's Third-Party Compatibility setting, then rescan. Credentials alone do not add TPAP support. |
+| `auth_failed` | Check that both TP-Link credentials are set and loaded by the running server. This can also indicate rejected credentials or a device's local-auth restriction. |
+| No responses | Check the subnet, device power, and network reachability from the server. |
+
+In a verified KP125M setup, enabling compatibility changed the plugs from
+`unsupported` to `auth_failed`; loading the missing `.env` credentials then
+restored control. Both steps were needed. Firmware updates can change local
+access requirements, so revisit the setting if previously working plugs stop
+connecting. This local setup does not require enabling `KASA_CLOUD_FALLBACK`.
 
 ### Cloud fallback
 
